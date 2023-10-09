@@ -1,6 +1,5 @@
-import jax
-import jax.numpy as jnp
-from flax import linen as nn
+import torch
+from torch import nn
 from einops import rearrange, repeat
 import math
 
