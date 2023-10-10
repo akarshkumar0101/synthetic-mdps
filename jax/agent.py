@@ -113,6 +113,7 @@ class Block(nn.Module):
 
 class Transformer(nn.Module):
     n_actions: int
+    n_steps: int
     n_layers: int
     n_heads: int
     d_embd: int
@@ -121,7 +122,7 @@ class Transformer(nn.Module):
         self.embed_obs = nn.Dense(features=self.d_embd)
         self.embed_action = nn.Embed(self.n_actions, features=self.d_embd)
         self.embed_reward = nn.Dense(features=self.d_embd)
-        self.embed_time = nn.Embed(self.n_actions, features=self.d_embd)
+        self.embed_time = nn.Embed(self.n_steps, features=self.d_embd)
 
         self.blocks = [Block(n_heads=self.n_heads, d_embd=self.d_embd) for _ in range(self.n_layers)]
         self.ln = nn.LayerNorm()
@@ -133,14 +134,10 @@ class Transformer(nn.Module):
         return self.forward_parallel(state, action, reward, time)
 
     def forward_parallel(self, obs, action, reward, time):
-        print('obs, action, reward, time shapes')
-        print(obs.shape, action.shape, reward.shape, time.shape)
         obs = self.embed_obs(obs)  # B, T, D
         action = self.embed_action(action)  # B, T, D
         reward = self.embed_reward(reward)  # B, T, D
         time = self.embed_time(time)  # B, T, D
-        print('obs, action, reward, time shapes')
-        print(obs.shape, action.shape, reward.shape, time.shape)
 
         # x = obs
         # x.at[:, 1:].add(action[:, :-1])  # s_1 contains a_0, s_n contains a_{n-1}
@@ -157,14 +154,10 @@ class Transformer(nn.Module):
 
     def forward_recurrent(self, state, oart):
         obs, action, reward, time = oart
-        print('obs, action, reward, time shapes')
-        print(obs.shape, action.shape, reward.shape, time.shape)
         obs = self.embed_obs(obs)  # B, 1, D
         action = self.embed_action(action)  # B, 1, D
         reward = self.embed_reward(reward)  # B, 1, D
         time = self.embed_time(time)  # B, 1, D
-        print('obs, action, reward, time shapes')
-        print(obs.shape, action.shape, reward.shape, time.shape)
 
         x = obs + action + reward + time
 
@@ -183,7 +176,7 @@ class Transformer(nn.Module):
 
 def main():
     rng = jax.random.PRNGKey(0)
-    net = Transformer(n_actions=10, n_layers=3, n_heads=4, d_embd=128)
+    net = Transformer(n_actions=10, n_steps=128, n_layers=3, n_heads=4, d_embd=128)
 
     b, t, d = 8, 32, 128
     obs = jnp.zeros((b, t, 64))
