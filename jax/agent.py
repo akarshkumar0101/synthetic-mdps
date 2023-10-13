@@ -15,12 +15,12 @@ def ret_parallel_forward(qkv):
 
 def ret_recurrent_forward(state, qkv):
     # state: D, D
-    q, k, v = qkv  # T, D with T=1
-    T, D = q.shape
-    assert T == 1
+    q, k, v = qkv  # D
+    assert q.ndim == 1 and k.ndim == 1 and v.ndim == 1
+    q, k, v = q[None, :], k[None, :], v[None, :]  # 1, D
     state = state + k.T * v  # D, D
     out = q @ state  # 1, D
-    return state, out  # state: D, D; out: 1, D
+    return state, out[0]  # state: D, D; out: D
 
 
 class MultiHeadAttention(nn.Module):
@@ -51,16 +51,16 @@ class MultiHeadAttention(nn.Module):
         return x
 
     def forward_recurrent(self, state, x):
-        T, D = x.shape
-        assert D == self.d_embd and T == 1
-        kqv = self.dense1(x)  # (T, 3 * D)
-        k, q, v = jnp.split(kqv, 3, axis=-1)  # (T, D)
-        k = rearrange(k, 't (h d) -> h t d', h=self.n_heads)
-        q = rearrange(q, 't (h d) -> h t d', h=self.n_heads)
-        v = rearrange(v, 't (h d) -> h t d', h=self.n_heads)
-        state, x = jax.vmap(ret_recurrent_forward)(state, (q, k, v))  # (H, Dh, Dh), (H, T, Dh)
-        x = rearrange(x, 'h t d -> t (h d)')  # (T, D)
-        x = self.dense2(x)  # (T, D)
+        D, = x.shape
+        assert D == self.d_embd
+        kqv = self.dense1(x)  # (3 * D)
+        k, q, v = jnp.split(kqv, 3, axis=-1)  # (D)
+        k = rearrange(k, '(h d) -> h d', h=self.n_heads)
+        q = rearrange(q, '(h d) -> h d', h=self.n_heads)
+        v = rearrange(v, '(h d) -> h d', h=self.n_heads)
+        state, x = jax.vmap(ret_recurrent_forward)(state, (q, k, v))  # (H, Dh, Dh), (H, Dh)
+        x = rearrange(x, 'h d -> (h d)')  # (D)
+        x = self.dense2(x)  # (D)
         return state, x
 
 
@@ -99,8 +99,8 @@ class Block(nn.Module):
         return x
 
     def forward_recurrent(self, state, x):
-        T, D = x.shape
-        assert D == self.d_embd and T == 1
+        D, = x.shape
+        assert D == self.d_embd
         state, xt = self.mha.forward_recurrent(state, self.ln1(x))
         x = x + xt
         x = x + self.mlp(self.ln2(x))
@@ -132,7 +132,7 @@ class Transformer(nn.Module):
     def forward_parallel(self, obs, action, reward, time):
         obs = self.embed_obs(obs)  # T, D
         action = self.embed_action(action)  # T, D
-        reward = self.embed_reward(reward)  # T, D
+        reward = self.embed_reward(reward[..., None])  # T, D
         time = self.embed_time(time)  # T, D
         x = obs + action + reward + time
         for block in self.blocks:
@@ -144,17 +144,17 @@ class Transformer(nn.Module):
 
     def forward_recurrent(self, state, oart):
         obs, action, reward, time = oart
-        obs = self.embed_obs(obs)  # T, D
-        action = self.embed_action(action)  # T, D
-        reward = self.embed_reward(reward)  # T, D
-        time = self.embed_time(time)  # T, D
+        obs = self.embed_obs(obs)  # D
+        action = self.embed_action(action)  # D
+        reward = self.embed_reward(reward[..., None])  # D
+        time = self.embed_time(time)  # D
         x = obs + action + reward + time
         state_out = [None] * self.n_layers
         for i in range(self.n_layers):
             state_out[i], x = self.blocks[i].forward_recurrent(state[i], x)
         x = self.ln(x)
-        logits = self.actor(x)  # T, A
-        values = self.critic(x)  # T, 1
+        logits = self.actor(x)  # A
+        values = self.critic(x)  # 1
         return state_out, (logits, values)
 
     def get_init_state(self, bs):
@@ -168,19 +168,16 @@ def main():
     bs, t, d = 8, 32, 128
 
     # ------ INIT ------
-    obs = jnp.zeros((t, 64))
-    action = jnp.zeros((t, ), dtype=jnp.int32)
-    reward = jnp.zeros((t, 1))
-    time = jnp.zeros((t, ), dtype=jnp.int32)
-    rng, _rng = jax.random.split(rng)
-    params = net.init(rng, obs, action, reward, time)
-    print(jax.tree_map(lambda x: x.shape, params))
-
     rng, *_rng = jax.random.split(rng, 1+4)
     obs = jax.random.normal(_rng[0], (bs, t, 64))
     action = jax.random.randint(_rng[1], (bs, t, ), 0, 10)
-    reward = jax.random.normal(_rng[2], (bs, t, 1))
+    reward = jax.random.normal(_rng[2], (bs, t, ))
     time = jax.random.randint(_rng[3], (bs, t, ), 0, 10)
+
+    rng, _rng = jax.random.split(rng)
+    params = net.init(rng, obs[0], action[0], reward[0], time[0])
+    print(jax.tree_map(lambda x: x.shape, params))
+
 
     from functools import partial
     # ------ PARALLEL FORWARD ------
@@ -197,19 +194,20 @@ def main():
     forward_recurrent = partial(net.apply, params, method=net.forward_recurrent)
     forward_recurrent = jax.vmap(forward_recurrent, in_axes=(0, (0, 0, 0, 0)))
 
-    obs_r = rearrange(obs, 'b t d -> t b 1 d')
-    action_r = rearrange(action, 'b t -> t b 1')
-    reward_r = rearrange(reward, 'b t d -> t b 1 d')
-    time_r = rearrange(time, 'b t -> t b 1')
+    obs_r = rearrange(obs, 'b t d -> t b d')
+    action_r = rearrange(action, 'b t -> t b')
+    reward_r = rearrange(reward, 'b t -> t b')
+    time_r = rearrange(time, 'b t -> t b')
 
     state = net.get_init_state(bs)
     state, (logits2, values2) = jax.lax.scan(forward_recurrent, state, (obs_r, action_r, reward_r, time_r))
-    logits2 = rearrange(logits2, 't b 1 d -> b t d')
-    values2 = rearrange(values2, 't b 1 d -> b t d')
+    logits2 = rearrange(logits2, 't b d -> b t d')
+    values2 = rearrange(values2, 't b d -> b t d')
     print('logits, values shapes')
     print(logits2.shape, values2.shape)
 
     print(jnp.allclose(logits1, logits2, atol=1e-3))
+    print(logits2.mean(), logits2[0, 0, :10])
 
 
 if __name__ == '__main__':
