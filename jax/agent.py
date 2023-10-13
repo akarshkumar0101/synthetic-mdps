@@ -1,31 +1,26 @@
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
-
-from einops import rearrange, repeat
-
-import math
+from einops import rearrange
 
 
 def ret_parallel_forward(qkv):
-    q, k, v = qkv
-    # q, k, v: B, H, T, D
-    B, H, T, D = q.shape
+    q, k, v = qkv  # T, D
+    T, D = q.shape
     mask = jnp.tril(jnp.ones((T, T), dtype=bool))  # causal masking
-    attn = mask * (q @ k.mT)
+    attn = mask * (q @ k.T)
     out = attn @ v
     return out
 
 
 def ret_recurrent_forward(state, qkv):
-    q, k, v = qkv
-    # state: B, H, D, D
-    # q, k, v: B, H, 1, D
-    B, H, T, D = q.shape
+    # state: D, D
+    q, k, v = qkv  # T, D with T=1
+    T, D = q.shape
     assert T == 1
-    state = state + k.mT * v  # B, H, D, D
-    out = q @ state  # B, H, 1, D
-    return state, out  # state: B, H, D, D; out: B, H, 1, D
+    state = state + k.T * v  # D, D
+    out = q @ state  # 1, D
+    return state, out  # state: D, D; out: 1, D
 
 
 class MultiHeadAttention(nn.Module):
@@ -43,30 +38,29 @@ class MultiHeadAttention(nn.Module):
         return self.forward_parallel(x)
 
     def forward_parallel(self, x):
-        bs, t, d_embd = x.shape
-        assert d_embd == self.d_embd
-        kqv = self.dense1(x)  # (bs, t, 3 * d_embd)
-        k, q, v = jnp.split(kqv, 3, axis=-1)  # (bs, t, d_embd)
-        k = rearrange(k, 'b t (h d) -> b h t d', h=self.n_heads)  # (bs, n_heads, t, d_head)
-        q = rearrange(q, 'b t (h d) -> b h t d', h=self.n_heads)  # (bs, n_heads, t, d_head)
-        v = rearrange(v, 'b t (h d) -> b h t d', h=self.n_heads)  # (bs, n_heads, t, d_head)
-        x = ret_parallel_forward((q, k, v))  # (bs, n_heads, t, d_head)
-        x = rearrange(x, 'b h t d -> b t (h d)')  # (bs, t, d_embd)
-        x = self.dense2(x)  # (bs, t, d_embd)
+        T, D = x.shape
+        assert D == self.d_embd
+        kqv = self.dense1(x)  # (T, 3 * D)
+        k, q, v = jnp.split(kqv, 3, axis=-1)  # (T, D)
+        k = rearrange(k, 't (h d) -> h t d', h=self.n_heads)
+        q = rearrange(q, 't (h d) -> h t d', h=self.n_heads)
+        v = rearrange(v, 't (h d) -> h t d', h=self.n_heads)
+        x = jax.vmap(ret_parallel_forward)((q, k, v))  # (H, T, Dh)
+        x = rearrange(x, 'h t d -> t (h d)')  # (T, D)
+        x = self.dense2(x)  # (T, D)
         return x
 
     def forward_recurrent(self, state, x):
-        bs, t, d_embd = x.shape
-        assert d_embd == self.d_embd
-        assert t == 1
-        kqv = self.dense1(x)  # (bs, t, 3 * d_embd)
-        k, q, v = jnp.split(kqv, 3, axis=-1)  # (bs, t, d_embd)
-        k = rearrange(k, 'b t (h d) -> b h t d', h=self.n_heads)  # (bs, n_heads, t, d_head)
-        q = rearrange(q, 'b t (h d) -> b h t d', h=self.n_heads)  # (bs, n_heads, t, d_head)
-        v = rearrange(v, 'b t (h d) -> b h t d', h=self.n_heads)  # (bs, n_heads, t, d_head)
-        state, x = ret_recurrent_forward(state, (q, k, v))  # (bs, n_heads, d_head, d_head), (bs, n_heads, 1, d_head)
-        x = rearrange(x, 'b h 1 d -> b 1 (h d)')  # (bs, t, d_embd)
-        x = self.dense2(x)  # (bs, t, d_embd)
+        T, D = x.shape
+        assert D == self.d_embd and T == 1
+        kqv = self.dense1(x)  # (T, 3 * D)
+        k, q, v = jnp.split(kqv, 3, axis=-1)  # (T, D)
+        k = rearrange(k, 't (h d) -> h t d', h=self.n_heads)
+        q = rearrange(q, 't (h d) -> h t d', h=self.n_heads)
+        v = rearrange(v, 't (h d) -> h t d', h=self.n_heads)
+        state, x = jax.vmap(ret_recurrent_forward)(state, (q, k, v))  # (H, Dh, Dh), (H, T, Dh)
+        x = rearrange(x, 'h t d -> t (h d)')  # (T, D)
+        x = self.dense2(x)  # (T, D)
         return state, x
 
 
@@ -98,18 +92,20 @@ class Block(nn.Module):
         return self.forward_parallel(x)
 
     def forward_parallel(self, x):
-        b, t, d = x.shape
+        T, D = x.shape
+        assert D == self.d_embd
         x = x + self.mha(self.ln1(x))
         x = x + self.mlp(self.ln2(x))
         return x
 
     def forward_recurrent(self, state, x):
-        b, t, d = x.shape
-        assert t == 1
+        T, D = x.shape
+        assert D == self.d_embd and T == 1
         state, xt = self.mha.forward_recurrent(state, self.ln1(x))
         x = x + xt
         x = x + self.mlp(self.ln2(x))
         return state, x
+
 
 class Transformer(nn.Module):
     n_actions: int
@@ -134,39 +130,31 @@ class Transformer(nn.Module):
         return self.forward_parallel(state, action, reward, time)
 
     def forward_parallel(self, obs, action, reward, time):
-        obs = self.embed_obs(obs)  # B, T, D
-        action = self.embed_action(action)  # B, T, D
-        reward = self.embed_reward(reward)  # B, T, D
-        time = self.embed_time(time)  # B, T, D
-
-        # x = obs
-        # x.at[:, 1:].add(action[:, :-1])  # s_1 contains a_0, s_n contains a_{n-1}
-        # x.at[:, 1:].add(reward[:, :-1])  # s_1 contains r_0, s_n contains r_{n-1}
-        # x = x + time
+        obs = self.embed_obs(obs)  # T, D
+        action = self.embed_action(action)  # T, D
+        reward = self.embed_reward(reward)  # T, D
+        time = self.embed_time(time)  # T, D
         x = obs + action + reward + time
-
         for block in self.blocks:
             x = block(x)
         x = self.ln(x)
-        logits = self.actor(x)  # B, T, n_actions
-        values = self.critic(x)  # B, T, 1
+        logits = self.actor(x)  # T, A
+        values = self.critic(x)  # T, 1
         return logits, values
 
     def forward_recurrent(self, state, oart):
         obs, action, reward, time = oart
-        obs = self.embed_obs(obs)  # B, 1, D
-        action = self.embed_action(action)  # B, 1, D
-        reward = self.embed_reward(reward)  # B, 1, D
-        time = self.embed_time(time)  # B, 1, D
-
+        obs = self.embed_obs(obs)  # T, D
+        action = self.embed_action(action)  # T, D
+        reward = self.embed_reward(reward)  # T, D
+        time = self.embed_time(time)  # T, D
         x = obs + action + reward + time
-
         state_out = [None] * self.n_layers
         for i in range(self.n_layers):
             state_out[i], x = self.blocks[i].forward_recurrent(state[i], x)
         x = self.ln(x)
-        logits = self.actor(x)  # B, 1, n_actions
-        values = self.critic(x)  # B, 1, 1
+        logits = self.actor(x)  # T, A
+        values = self.critic(x)  # T, 1
         return state_out, (logits, values)
 
     def get_init_state(self, bs):
@@ -177,31 +165,44 @@ class Transformer(nn.Module):
 def main():
     rng = jax.random.PRNGKey(0)
     net = Transformer(n_actions=10, n_steps=128, n_layers=3, n_heads=4, d_embd=128)
+    bs, t, d = 8, 32, 128
 
-    b, t, d = 8, 32, 128
-    obs = jnp.zeros((b, t, 64))
-    action = jnp.zeros((b, t), dtype=jnp.int32)
-    reward = jnp.zeros((b, t, 1))
-    time = jnp.zeros((b, t), dtype=jnp.int32)
-
+    # ------ INIT ------
+    obs = jnp.zeros((t, 64))
+    action = jnp.zeros((t, ), dtype=jnp.int32)
+    reward = jnp.zeros((t, 1))
+    time = jnp.zeros((t, ), dtype=jnp.int32)
+    rng, _rng = jax.random.split(rng)
     params = net.init(rng, obs, action, reward, time)
-
     print(jax.tree_map(lambda x: x.shape, params))
 
+    rng, *_rng = jax.random.split(rng, 1+4)
+    obs = jax.random.normal(_rng[0], (bs, t, 64))
+    action = jax.random.randint(_rng[1], (bs, t, ), 0, 10)
+    reward = jax.random.normal(_rng[2], (bs, t, 1))
+    time = jax.random.randint(_rng[3], (bs, t, ), 0, 10)
+
+    from functools import partial
     # ------ PARALLEL FORWARD ------
-    logits1, values1 = net.apply(params, obs, action, reward, time)
+    forward_parallel = partial(net.apply, params)
+    forward_parallel = jax.vmap(forward_parallel, in_axes=(0, 0, 0, 0))
+
+    logits1, values1 = forward_parallel(obs, action, reward, time)
     print('logits, values shapes')
     print(logits1.shape, values1.shape)
 
+    print(logits1.mean(), logits1[0, 0, :10])
+
     # ------ RECURRENT FORWARD ------
+    forward_recurrent = partial(net.apply, params, method=net.forward_recurrent)
+    forward_recurrent = jax.vmap(forward_recurrent, in_axes=(0, (0, 0, 0, 0)))
+
     obs_r = rearrange(obs, 'b t d -> t b 1 d')
     action_r = rearrange(action, 'b t -> t b 1')
     reward_r = rearrange(reward, 'b t d -> t b 1 d')
     time_r = rearrange(time, 'b t -> t b 1')
 
-    from functools import partial
-    forward_recurrent = partial(net.apply, params, method=net.forward_recurrent)
-    state = net.get_init_state(b)
+    state = net.get_init_state(bs)
     state, (logits2, values2) = jax.lax.scan(forward_recurrent, state, (obs_r, action_r, reward_r, time_r))
     logits2 = rearrange(logits2, 't b 1 d -> b t d')
     values2 = rearrange(values2, 't b 1 d -> b t d')
@@ -213,7 +214,6 @@ def main():
 
 if __name__ == '__main__':
     main()
-
 
 """
 obs = env.reset()
@@ -245,4 +245,3 @@ def test_retnet_qkv():
     print(f'{q.shape=} {k.shape=} {v.shape=}')
     print(f'{out1.shape=} {out2.shape=}')
     print(jnp.allclose(out1, out2, atol=1e-4))
-
