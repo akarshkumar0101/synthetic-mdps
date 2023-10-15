@@ -3,7 +3,6 @@ import jax.numpy as jnp
 from flax import linen as nn
 from einops import rearrange
 
-
 def ret_parallel_forward(qkv):
     q, k, v = qkv  # T, D
     T, D = q.shape
@@ -140,7 +139,7 @@ class Transformer(nn.Module):
         x = self.ln(x)
         logits = self.actor(x)  # T, A
         values = self.critic(x)  # T, 1
-        return logits, values
+        return logits, values[..., 0]
 
     def forward_recurrent(self, state, oart):
         obs, action, reward, time = oart
@@ -155,7 +154,7 @@ class Transformer(nn.Module):
         x = self.ln(x)
         logits = self.actor(x)  # A
         values = self.critic(x)  # 1
-        return state_out, (logits, values)
+        return state_out, (logits, values[..., 0])
 
     def get_init_state(self, bs):
         self.d_head = self.d_embd // self.n_heads
@@ -163,6 +162,8 @@ class Transformer(nn.Module):
 
 
 def main():
+    from functools import partial
+
     rng = jax.random.PRNGKey(0)
     net = Transformer(n_actions=10, n_steps=128, n_layers=3, n_heads=4, d_embd=128)
     bs, t, d = 8, 32, 128
@@ -178,36 +179,28 @@ def main():
     params = net.init(rng, obs[0], action[0], reward[0], time[0])
     print(jax.tree_map(lambda x: x.shape, params))
 
-
-    from functools import partial
     # ------ PARALLEL FORWARD ------
     forward_parallel = partial(net.apply, params)
     forward_parallel = jax.vmap(forward_parallel, in_axes=(0, 0, 0, 0))
 
     logits1, values1 = forward_parallel(obs, action, reward, time)
-    print('logits, values shapes')
-    print(logits1.shape, values1.shape)
-
-    print(logits1.mean(), logits1[0, 0, :10])
 
     # ------ RECURRENT FORWARD ------
     forward_recurrent = partial(net.apply, params, method=net.forward_recurrent)
     forward_recurrent = jax.vmap(forward_recurrent, in_axes=(0, (0, 0, 0, 0)))
 
-    obs_r = rearrange(obs, 'b t d -> t b d')
-    action_r = rearrange(action, 'b t -> t b')
-    reward_r = rearrange(reward, 'b t -> t b')
-    time_r = rearrange(time, 'b t -> t b')
+    obs_r = rearrange(obs, 'b t ... -> t b ...')
+    action_r = rearrange(action, 'b t ... -> t b ...')
+    reward_r = rearrange(reward, 'b t ... -> t b ...')
+    time_r = rearrange(time, 'b t ... -> t b ...')
 
     state = net.get_init_state(bs)
     state, (logits2, values2) = jax.lax.scan(forward_recurrent, state, (obs_r, action_r, reward_r, time_r))
-    logits2 = rearrange(logits2, 't b d -> b t d')
-    values2 = rearrange(values2, 't b d -> b t d')
-    print('logits, values shapes')
-    print(logits2.shape, values2.shape)
+    logits2 = rearrange(logits2, 't b ... -> b t ...')
+    values2 = rearrange(values2, 't b ... -> b t ...')
 
-    print(jnp.allclose(logits1, logits2, atol=1e-3))
-    print(logits2.mean(), logits2[0, 0, :10])
+    assert jnp.allclose(logits1, logits2, atol=1e-3)
+    assert jnp.allclose(values1, values2, atol=1e-3)
 
 
 if __name__ == '__main__':
