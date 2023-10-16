@@ -27,6 +27,7 @@ def rollout(model, env, rng, agent_params, env_params, agent_state, env_state, o
         carry = rng, agent_state, env_state, oart
         return carry, dict(obs=obs, act=act, rew=rew, done=done,
                            time=time, logits=logits, val=val, act_p=act_p, rew_p=rew_p)
+
     carry = rng, agent_state, env_state, oart
     carry, buffer = jax.lax.scan(rollout_step, carry, jnp.arange(n_steps))
     return carry, buffer
@@ -63,6 +64,7 @@ def calc_gae(buffer, val_last, gamma=0.99, gae_lambda=0.95):
         delta = reward + gamma * next_value * (1 - done) - value
         gae = (delta + gamma * gae_lambda * (1 - done) * gae)
         return (gae, value), gae
+
     carry = jnp.zeros_like(val_last), val_last
     _, adv = jax.lax.scan(gae_step, carry, buffer, reverse=True, unroll=16)
     ret = adv + buffer['val']
@@ -168,10 +170,6 @@ def train(rng, config):
     # update_state, loss_info = jax.lax.scan(update_step, update_state, None, config["UPDATE_EPOCHS"])
 
 
-def run_ppo(rng, env, agent):
-    pass
-
-
 def main():
     config = {
         'lr': 1e-3,
@@ -190,11 +188,11 @@ def main():
     env, env_params = gymnax.make("CartPole-v1")
     env_params = jax.tree_map(lambda x: jnp.array([x for _ in range(n_envs)]), env_params)
 
-    rng, *_rng = jax.random.split(rng, 1+n_envs)
+    rng, *_rng = jax.random.split(rng, 1 + n_envs)
     obs, env_state = jax.vmap(env.reset, in_axes=(0, None))(jnp.stack(_rng), env_params)
-    act = jnp.zeros((n_envs, ), dtype=jnp.int32)
-    rew = jnp.zeros((n_envs, ))
-    time = jnp.zeros((n_envs, ), dtype=jnp.int32)
+    act = jnp.zeros((n_envs,), dtype=jnp.int32)
+    rew = jnp.zeros((n_envs,))
+    time = jnp.zeros((n_envs,), dtype=jnp.int32)
     oart = obs, act, rew, time
 
     model = Transformer(n_actions=env.action_space(env_params).n, n_steps=n_steps, n_layers=3, n_heads=4, d_embd=32)
@@ -208,14 +206,19 @@ def main():
     print('agent_state: ')
     print(jax.tree_map(lambda x: x.shape, agent_state))
 
-
     # env_params = jax.tree_map(lambda x: x[0], env_params)
     # agent_state = jax.tree_map(lambda x: x[0], agent_state)
     # env_state = jax.tree_map(lambda x: x[0], env_state)
     # oart = jax.tree_map(lambda x: x[0], oart)
     # rollout(model, env, rng, agent_params, env_params, agent_state, env_state, oart, n_steps)
 
-    rng, *_rng = jax.random.split(rng, 1+n_envs)
+
+def run_ppo(model, env, rng, agent_params, env_params, config):
+    tx = optax.chain(optax.clip_by_global_norm(1.), optax.adam(1e-2, eps=1e-5), )
+    train_state = TrainState.create(apply_fn=partial(model.apply, method=model.forward_parallel),
+                                    params=agent_params, tx=tx)
+
+    rng, *_rng = jax.random.split(rng, 1 + n_envs)
     _rng = jnp.stack(_rng)
 
     # def rollout(model, env, rng, agent_params, env_params, agent_state, env_state, oart, n_steps):
@@ -233,10 +236,6 @@ def main():
     clip_coef = 0.2
     vf_coef = 0.5
     ent_coef = 0.01
-
-    tx = optax.chain(optax.clip_by_global_norm(1.), optax.adam(1e-2, eps=1e-5), )
-    train_state = TrainState.create(apply_fn=partial(model.apply, method=model.forward_parallel),
-                                    params=agent_params, tx=tx)
 
     def update_step(train_state, rng):
         def loss_fn(params, batch):
@@ -278,7 +277,7 @@ def main():
         train_state = train_state.apply_gradients(grads=grads)
         return train_state, None
 
-    rng, *_rng = jax.random.split(rng, 1+n_updates)
+    rng, *_rng = jax.random.split(rng, 1 + n_updates)
     train_state, _ = jax.lax.scan(update_step, train_state, jnp.stack(_rng))
 
 
