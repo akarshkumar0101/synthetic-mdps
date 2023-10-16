@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from flax import linen as nn
 from einops import rearrange
 
+
 def ret_parallel_forward(qkv):
     q, k, v = qkv  # T, D
     T, D = q.shape
@@ -169,11 +170,11 @@ def main():
     bs, t, d = 8, 32, 128
 
     # ------ INIT ------
-    rng, *_rng = jax.random.split(rng, 1+4)
+    rng, *_rng = jax.random.split(rng, 1 + 4)
     obs = jax.random.normal(_rng[0], (bs, t, 64))
-    action = jax.random.randint(_rng[1], (bs, t, ), 0, 10)
-    reward = jax.random.normal(_rng[2], (bs, t, ))
-    time = jax.random.randint(_rng[3], (bs, t, ), 0, 10)
+    action = jax.random.randint(_rng[1], (bs, t,), 0, 10)
+    reward = jax.random.normal(_rng[2], (bs, t,))
+    time = jax.random.randint(_rng[3], (bs, t,), 0, 10)
 
     rng, _rng = jax.random.split(rng)
     params = net.init(rng, obs[0], action[0], reward[0], time[0])
@@ -181,13 +182,13 @@ def main():
 
     # ------ PARALLEL FORWARD ------
     forward_parallel = partial(net.apply, params)
-    forward_parallel = jax.vmap(forward_parallel, in_axes=(0, 0, 0, 0))
+    forward_parallel = jax.vmap(forward_parallel)
 
     logits1, values1 = forward_parallel(obs, action, reward, time)
 
     # ------ RECURRENT FORWARD ------
     forward_recurrent = partial(net.apply, params, method=net.forward_recurrent)
-    forward_recurrent = jax.vmap(forward_recurrent, in_axes=(0, (0, 0, 0, 0)))
+    forward_recurrent = jax.vmap(forward_recurrent)
 
     obs_r = rearrange(obs, 'b t ... -> t b ...')
     action_r = rearrange(action, 'b t ... -> t b ...')

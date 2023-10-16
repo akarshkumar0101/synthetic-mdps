@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from flax import linen as nn
 from einops import rearrange
 
+
 class LinearSyntheticMDP(nn.Module):
     n_actions: int
     d_state: int
