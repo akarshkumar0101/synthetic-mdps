@@ -8,7 +8,7 @@ def main():
     for i in range(1000):
         x = A @ x
         x = x / x.norm()
-        print(x.tolist())
+        print(x.tolist()[:10])
 
 
 if __name__ == '__main__':

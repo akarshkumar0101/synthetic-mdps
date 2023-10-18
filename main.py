@@ -80,5 +80,34 @@ def main():
     pass
 
 
+import equinox as eqx
+import jax
+
+class Linear(eqx.Module):
+    weight: jax.Array
+    bias: jax.Array
+
+    def __init__(self, in_size, out_size, key):
+        wkey, bkey = jax.random.split(key)
+        self.weight = jax.random.normal(wkey, (out_size, in_size))
+        self.bias = jax.random.normal(bkey, (out_size,))
+
+    def __call__(self, x):
+        return self.weight @ x + self.bias
+
+
 if __name__ == '__main__':
-    main()
+    rng = jax.random.PRNGKey(0)
+    x = jax.random.normal(rng, (10,))
+    net = Linear(10, 20, rng)
+    y = net(x)
+    print(jax.tree_map(lambda x: x.shape, net))
+    print(x.shape, y.shape)
+
+    x = jax.random.normal(rng, (10,))
+    rng, *_rng = jax.random.split(rng, 1+4)
+    net = jax.vmap(Linear, in_axes=(None, None, 0))(10, 20, jnp.stack(_rng))
+    y = net(x)
+    print(jax.tree_map(lambda x: x.shape, net))
+    # print(x.shape, y.shape)
+

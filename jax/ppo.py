@@ -19,7 +19,7 @@ def make_train(config):
     env = FlattenObservationWrapper(env)
     env = LogWrapper(env)
 
-    def train(rng):
+    def train(rng, config):
         agent = Transformer(n_actions=env.action_space(env_params).n, n_steps=config['n_steps'],
                             n_layers=3, n_heads=4, d_embd=32)
         obs_init = jnp.zeros((config['n_steps'], *env.observation_space(env_params).shape))
@@ -177,7 +177,8 @@ if __name__ == '__main__':
                   clip_coef=0.2, vf_coef=0.5, ent_coef=0.01)
     #
     rng = jax.random.PRNGKey(30)
-    train = jax.jit(jax.vmap(make_train(config)))
+    train = partial(make_train(config), config=config)
+    train = jax.jit(jax.vmap(train))
     runner_state, info = train(jnp.stack(jax.random.split(rng, 2)))
     # rng, train_state, env_params, agent_state, env_state, (obs, act, rew, time) = runner_state
 
