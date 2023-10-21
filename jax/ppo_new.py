@@ -10,8 +10,6 @@ import distrax
 import gymnax
 from wrappers import LogWrapper, FlattenObservationWrapper
 
-from agent import Transformer
-
 
 class ActorCritic(nn.Module):
     action_dim: Sequence[int]
@@ -63,10 +61,10 @@ class Transition(NamedTuple):
 
 def make_train(config):
     config["NUM_UPDATES"] = (
-            config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
+        config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
     config["MINIBATCH_SIZE"] = (
-            config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
+        config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
     env, env_params = gymnax.make(config["ENV_NAME"])
     env = FlattenObservationWrapper(env)
@@ -74,31 +72,20 @@ def make_train(config):
 
     def linear_schedule(count):
         frac = (
-                1.0
-                - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"]))
-                / config["NUM_UPDATES"]
+            1.0
+            - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"]))
+            / config["NUM_UPDATES"]
         )
         return config["LR"] * frac
 
     def train(rng):
         # INIT NETWORK
-        # ------------------------------------------------
-
-        network = Transformer(n_actions=env.action_space(env_params).n, n_steps=config['NUM_STEPS'],
-                              n_layers=3, n_heads=4, d_embd=32)
+        network = ActorCritic(
+            env.action_space(env_params).n, activation=config["ACTIVATION"]
+        )
         rng, _rng = jax.random.split(rng)
-        init_x = jnp.zeros((config['NUM_STEPS'], *env.observation_space(env_params).shape))
-        init_act = jnp.zeros((config['NUM_STEPS'], ), dtype=jnp.int32)
-        init_rew = jnp.zeros((config['NUM_STEPS'], ))
-        init_time = jnp.zeros((config['NUM_STEPS'], ), dtype=jnp.int32)
-        network_params = network.init(_rng, init_x, init_act, init_rew, init_time)
-        print(jax.tree_map(lambda x: x.shape, network_params))
-        # network = ActorCritic(
-        #     env.action_space(env_params).n, activation=config["ACTIVATION"]
-        # )
-        # rng, _rng = jax.random.split(rng)
-        # init_x = jnp.zeros(env.observation_space(env_params).shape)
-        # network_params = network.init(_rng, init_x)
+        init_x = jnp.zeros(env.observation_space(env_params).shape)
+        network_params = network.init(_rng, init_x)
         if config["ANNEAL_LR"]:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
@@ -119,9 +106,6 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
         obsv, env_state = jax.vmap(env.reset, in_axes=(0, None))(reset_rng, env_params)
-        actv = jnp.zeros((config["NUM_ENVS"],), dtype=jnp.int32)
-        rewv = jnp.zeros((config["NUM_ENVS"],))
-        timev = jnp.zeros((config["NUM_ENVS"],), dtype=jnp.int32)
 
         # TRAIN LOOP
         def _update_step(runner_state, unused):
@@ -131,7 +115,6 @@ def make_train(config):
 
                 # SELECT ACTION
                 rng, _rng = jax.random.split(rng)
-                print(last_obs.shape)
                 pi, value = network.apply(train_state.params, last_obs)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
@@ -166,8 +149,8 @@ def make_train(config):
                     )
                     delta = reward + config["GAMMA"] * next_value * (1 - done) - value
                     gae = (
-                            delta
-                            + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
+                        delta
+                        + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
                     )
                     return (gae, value), gae
 
@@ -194,12 +177,12 @@ def make_train(config):
 
                         # CALCULATE VALUE LOSS
                         value_pred_clipped = traj_batch.value + (
-                                value - traj_batch.value
+                            value - traj_batch.value
                         ).clip(-config["CLIP_EPS"], config["CLIP_EPS"])
                         value_losses = jnp.square(value - targets)
                         value_losses_clipped = jnp.square(value_pred_clipped - targets)
                         value_loss = (
-                                0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
+                            0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
                         )
 
                         # CALCULATE ACTOR LOSS
@@ -207,21 +190,21 @@ def make_train(config):
                         gae = (gae - gae.mean()) / (gae.std() + 1e-8)
                         loss_actor1 = ratio * gae
                         loss_actor2 = (
-                                jnp.clip(
-                                    ratio,
-                                    1.0 - config["CLIP_EPS"],
-                                    1.0 + config["CLIP_EPS"],
-                                )
-                                * gae
+                            jnp.clip(
+                                ratio,
+                                1.0 - config["CLIP_EPS"],
+                                1.0 + config["CLIP_EPS"],
+                            )
+                            * gae
                         )
                         loss_actor = -jnp.minimum(loss_actor1, loss_actor2)
                         loss_actor = loss_actor.mean()
                         entropy = pi.entropy().mean()
 
                         total_loss = (
-                                loss_actor
-                                + config["VF_COEF"] * value_loss
-                                - config["ENT_COEF"] * entropy
+                            loss_actor
+                            + config["VF_COEF"] * value_loss
+                            - config["ENT_COEF"] * entropy
                         )
                         return total_loss, (value_loss, loss_actor, entropy)
 
@@ -236,7 +219,7 @@ def make_train(config):
                 rng, _rng = jax.random.split(rng)
                 batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
                 assert (
-                        batch_size == config["NUM_STEPS"] * config["NUM_ENVS"]
+                    batch_size == config["NUM_STEPS"] * config["NUM_ENVS"]
                 ), "batch size must be equal to number of steps * number of envs"
                 permutation = jax.random.permutation(_rng, batch_size)
                 batch = (traj_batch, advantages, targets)
@@ -271,7 +254,6 @@ def make_train(config):
                     timesteps = info["timestep"][info["returned_episode"]] * config["NUM_ENVS"]
                     for t in range(len(timesteps)):
                         print(f"global step={timesteps[t]}, episodic return={return_values[t]}")
-
                 jax.debug.callback(callback, metric)
 
             runner_state = (train_state, env_state, last_obs, rng)
@@ -292,7 +274,7 @@ if __name__ == "__main__":
         "LR": 2.5e-4,
         "NUM_ENVS": 4,
         "NUM_STEPS": 128,
-        "TOTAL_TIMESTEPS": 1e4,
+        "TOTAL_TIMESTEPS": 3e5,  # 5e5,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 4,
         "GAMMA": 0.99,
@@ -307,6 +289,17 @@ if __name__ == "__main__":
         "DEBUG": True,
     }
     rng = jax.random.PRNGKey(30)
-    train_jit = jax.jit(jax.vmap(make_train(config)))
-    results = train_jit(jax.random.split(rng, 1))
-    print(jax.tree_map(lambda x: x.shape, results['metrics']))
+    train_fn = jax.jit(jax.vmap(make_train(config)))
+    rng, *_rng = jax.random.split(rng, 1+16)
+    out = train_fn(jnp.stack(_rng))
+    metrics = out["metrics"]
+    print(jax.tree_map(lambda x: x.shape, metrics))
+    rets = metrics["returned_episode_returns"]  # n_seed, n_iters, n_steps, n_envs
+    import matplotlib.pyplot as plt
+    plt.plot(jnp.mean(rets, axis=(0, 2, 3)))
+    plt.plot(jnp.mean(rets, axis=(2, 3)).T, c='gray', alpha=0.3)
+    plt.ylabel('Return')
+    # plt.xlabel('')
+    plt.show()
+
+
