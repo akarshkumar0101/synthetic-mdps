@@ -157,9 +157,8 @@ class Transformer(nn.Module):
         values = self.critic(x)  # 1
         return state_out, (logits, values[..., 0])
 
-    def get_init_state(self, bs):
-        self.d_head = self.d_embd // self.n_heads
-        return [jnp.zeros((bs, self.n_heads, self.d_head, self.d_head)) for _ in range(self.n_layers)]
+    def get_init_state(self, rng):
+        return [jnp.zeros((self.n_heads, self.d_head, self.d_head)) for _ in range(self.n_layers)]
 
 
 def main():
