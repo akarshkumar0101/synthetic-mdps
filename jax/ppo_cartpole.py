@@ -13,6 +13,8 @@ from agents.basic import BasicAgent
 from agents.linear_transformer import LinearTransformerAgent
 
 
+global_iter = 0
+
 def make_train(config):
     config["NUM_UPDATES"] = (config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"])
     config["MINIBATCH_SIZE"] = (config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"])
@@ -24,7 +26,7 @@ def make_train(config):
         frac = (1.0 - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"])) / config["NUM_UPDATES"])
         return config["LR"] * frac
 
-    def train(rng):
+    def train(id, rng):
         # INIT ENV
         rng, _rng = jax.random.split(rng)
         _rng = jax.random.split(_rng, config["NUM_ENVS"])
@@ -163,14 +165,17 @@ def make_train(config):
             metric = traj_batch['info']
             rng = update_state[-1]
             if config.get("DEBUG"):
-                def callback(info):
+                def callback(id, info):
                     return_values = info["returned_episode_returns"][info["returned_episode"]]
                     timesteps = info["timestep"][info["returned_episode"]] * config["NUM_ENVS"]
                     # for t in range(len(timesteps)):
                     #     print(f"global step={timesteps[t]}, episodic return={return_values[t]}")
-                    print('running!')
+                    if id==0:
+                        global global_iter
+                        global_iter += 1
+                        print(global_iter*config["NUM_STEPS"]*config["NUM_ENVS"])
 
-                jax.debug.callback(callback, metric)
+                jax.debug.callback(callback, id, metric)
 
             runner_state = (train_state, env_state, agent_state, (obs, act_p, rew_p), rng)
             return runner_state, metric
@@ -206,7 +211,7 @@ if __name__ == "__main__":
     rng = jax.random.PRNGKey(30)
     train_fn = jax.jit(jax.vmap(make_train(config)))
     rng, *_rng = jax.random.split(rng, 1 + 32)
-    out = train_fn(jnp.stack(_rng))
+    out = train_fn(jnp.arange(len(_rng)), jnp.stack(_rng))
     metrics = out["metrics"]
     print(jax.tree_map(lambda x: x.shape, metrics))
     rets = metrics["returned_episode_returns"]  # n_seed, n_iters, n_steps, n_envs
@@ -220,5 +225,6 @@ if __name__ == "__main__":
     plt.legend()
     plt.ylabel('Return')
     plt.xlabel('Env Steps')
+    plt.title('CartPole 4x128, Agent: MetaRLLinearTransformer')
     plt.show()
 

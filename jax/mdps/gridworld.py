@@ -28,7 +28,7 @@ class GridEnv(environment.Environment):
         obs = self.get_obs(state)
         rew = self.get_rew(state, params)
 
-        done = time >= self.max_steps
+        done = state['time'] >= self.max_steps
         info = {}
         return obs, state, rew, done, info
 
@@ -48,7 +48,7 @@ class GridEnv(environment.Environment):
         pos = state['pos']
         pos_rew = params['pos_rew']
         d = jnp.linalg.norm((pos - pos_rew).astype(jnp.float32))
-        return 1 / ((d/2) ** 2 + 1)
+        return 1 / (d ** 2 + 1)
 
     @property
     def name(self) -> str:
@@ -72,7 +72,7 @@ def main():
     import matplotlib.pyplot as plt
     rng = jax.random.PRNGKey(0)
 
-    env = GridEnv(16, 32)
+    env = GridEnv(4, 5)
 
     rng, _rng = jax.random.split(rng)
     env_params = env.sample_params(_rng)
@@ -82,14 +82,19 @@ def main():
 
     print(obs, state)
 
-    for i in range(30):
-        rng, _rng = jax.random.split(rng)
-        act = jax.random.randint(_rng, (), 0, env.n_acts)
-        rng, _rng = jax.random.split(rng)
-        obs, state, rew, done, info = env.step(_rng, state, act, env_params)
+    for i in range(3):
+        print()
+        print()
+        for t in range(5):
+            # print(state['time'])
+            rng, _rng = jax.random.split(rng)
+            act = jax.random.randint(_rng, (), 0, env.n_acts)
+            rng, _rng = jax.random.split(rng)
+            obs, state, rew, done, info = env.step(_rng, state, act, env_params)
+            # print(state['time'])
+            print(done)
 
-        plt.imshow(obs)
-        plt.show()
+
 
 
 if __name__ == '__main__':
