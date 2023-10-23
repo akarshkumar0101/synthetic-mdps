@@ -1,59 +1,60 @@
 import jax
 import jax.numpy as jnp
-from jax import lax
 from gymnax.environments import environment, spaces
-from typing import Tuple, Optional
-import chex
-from flax import struct
 import flax.linen as nn
-from einops import rearrange, repeat
 
 
 class SyntheticMDP(environment.Environment):
-    def __init__(self, state_shape, obs_shape, n_acts, model_trans, model_obs, model_rew):
+    def __init__(self, state_shape, obs_shape, n_acts,
+                 model_init, model_trans, model_obs, model_rew, iid_multi_trans=True):
         super().__init__()
         self.state_shape = state_shape
         self.obs_shape = obs_shape
         self.n_acts = n_acts
+        self.iid_multi_trans = iid_multi_trans
+        assert self.iid_multi_trans  # make sure other case is implemented properly
 
-        self.model_trans = model_trans  # state to state
+        self.model_init = model_init  # rng to state
+        self.model_trans = model_trans  # (state, rng to state) if iid_multi_trans else (state, action, rng to state)
         self.model_obs = model_obs  # state to obs
-        self.model_rew = model_rew  # state to R^1
+        self.model_rew = model_rew  # state to R
 
     def sample_params(self, rng):
-        rng, _rng_trans, _rng_obs, _rng_rew = jax.random.split(rng, 4)
-        state = jnp.zeros(self.state_shape)
-        _rng_trans = jnp.stack(jax.random.split(_rng_trans, self.n_acts))
-        # params_trans = jax.vmap(self.model_trans.init, in_axes=(0, None, None))(_rng_trans, state, rng)
-        params_trans = jax.vmap(self.model_trans.init, in_axes=(0, None))(_rng_trans, state)
+        _rng_init, _rng_trans, _rng_obs, _rng_rew = jax.random.split(rng, 4)
+
+        params_init = self.model_init.init(_rng_init)
+        state = self.model_init.apply(params_init, rng)
+        if self.iid_multi_trans:
+            _rng_trans = jnp.stack(jax.random.split(_rng_trans, self.n_acts))
+            params_trans = jax.vmap(self.model_trans.init, in_axes=(0, None, None))(_rng_trans, state, rng)
+        else:
+            action = jnp.zeros((), dtype=jnp.int32)
+            params_trans = self.model_trans.init(_rng_trans, state, action, rng)
         params_obs = self.model_obs.init(_rng_obs, state)
         params_rew = self.model_rew.init(_rng_rew, state)
-        return params_trans, params_obs, params_rew
-
-    # @property
-    # def default_params(self) -> EnvParams:
-    #     return EnvParams()
-
-    def step_env(self, rng, state, action, params):
-        """Performs step transitions in the environment."""
-        params_trans, params_obs, params_rew = params
-
-        # state = jax.vmap(self.model_trans.apply, in_axes=(0, None, None))(params_trans, state, rng)[action]
-        state = jax.vmap(self.model_trans.apply, in_axes=(0, None))(params_trans, state)[action]
-        obs = self.model_obs.apply(params_obs, state)
-        rew = self.model_rew.apply(params_rew, state)[..., 0]
-
-        done = jnp.zeros(rew.shape, dtype=jnp.bool_)
-        info = {}
-        return obs, state, rew, done, info
+        return params_init, params_trans, params_obs, params_rew
 
     def reset_env(self, rng, params):
         """Performs resetting of environment."""
-        params_trans, params_obs, params_rew = params
-        state = jax.random.normal(rng, self.state_shape)
-        state = state / jnp.linalg.norm(state)
+        params_init, params_trans, params_obs, params_rew = params
+
+        state = self.model_init.apply(params_init, rng)
         obs = self.model_obs.apply(params_obs, state)
         return obs, state
+
+    def step_env(self, rng, state, action, params):
+        """Performs step transitions in the environment."""
+        params_init, params_trans, params_obs, params_rew = params
+
+        if self.iid_multi_trans:
+            state = jax.vmap(self.model_trans.apply, in_axes=(0, None))(params_trans, state)[action]
+        else:
+            state = self.model_trans.apply(params_trans, state, action)
+        obs = self.model_obs.apply(params_obs, state)
+        rew = self.model_rew.apply(params_rew, state)
+        done = jnp.zeros((), dtype=jnp.bool_)
+        info = {}
+        return obs, state, rew, done, info
 
     @property
     def name(self) -> str:
@@ -68,10 +69,6 @@ class SyntheticMDP(environment.Environment):
 
     def observation_space(self, params):
         return spaces.Box(-1, 1, self.obs_shape, dtype=jnp.float32)
-
-    def state_space(self, params):
-        return spaces.Box(-1, 1, self.state_shape, dtype=jnp.float32)
-
 
 # class MultiActionFunction(nn.Module):
 #     model_class: nn.Module
