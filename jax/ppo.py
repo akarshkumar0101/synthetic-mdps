@@ -14,31 +14,24 @@ from agents.linear_transformer import LinearTransformerAgent
 global_iter = 0
 
 
-def make_train(config):
+def make_train(config, env, network):
     config["NUM_UPDATES"] = (config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"])
     config["MINIBATCH_SIZE"] = (config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"])
-    # env, env_params = gymnax.make(config["ENV_NAME"])
-    env = GridEnv(grid_len=8, max_steps=128)
-    env_params = jax.vmap(env.sample_params)(jax.random.split(jax.random.PRNGKey(0), config["NUM_ENVS"]))
-    env = FlattenObservationWrapper(env)
-    env = LogWrapper(env)
 
     def linear_schedule(count):
         frac = (1.0 - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"])) / config["NUM_UPDATES"])
         return config["LR"] * frac
 
-    def train(id, rng):
+    def train(id, rng, network_params):
         # INIT ENV
         rng, _rng = jax.random.split(rng)
-        _rng = jax.random.split(_rng, config["NUM_ENVS"])
-        obs, env_state = jax.vmap(env.reset, in_axes=(0, 0))(_rng, env_params)
+        env_params = jax.vmap(env.sample_params)(jax.random.split(_rng, config["NUM_ENVS"]))
+        rng, _rng = jax.random.split(rng)
+        obs, env_state = jax.vmap(env.reset, in_axes=(0, 0))(jax.random.split(_rng, config["NUM_ENVS"]), env_params)
         act_p, rew_p = jnp.zeros(config["NUM_ENVS"], dtype=jnp.int32), jnp.zeros(config["NUM_ENVS"])
         oar = obs, act_p, rew_p
 
         # INIT NETWORK
-        network = LinearTransformerAgent(n_acts=env.action_space(env_params).n,
-                                         n_steps=config['NUM_STEPS'], n_layers=1, n_heads=4, d_embd=128)
-        # network = BasicAgent(env.action_space(env_params).n, activation=config["ACTIVATION"])
         forward_recurrent = jax.vmap(partial(network.apply, method=network.forward_recurrent),
                                      in_axes=(None, 0, (0, 0, 0)))
         forward_parallel = jax.vmap(partial(network.apply, method=network.forward_parallel),
@@ -47,10 +40,6 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         _rng = jax.random.split(_rng, config["NUM_ENVS"])
         agent_init_state = jax.vmap(network.get_init_state)(_rng)
-
-        rng, _rng = jax.random.split(rng)
-        init_x = jax.tree_map(lambda x: x[0], (agent_init_state, (obs, act_p, rew_p)))
-        network_params = network.init(_rng, *init_x, method=network.forward_recurrent)
 
         if config["ANNEAL_LR"]:
             tx = optax.chain(
@@ -90,17 +79,17 @@ def make_train(config):
                 return runner_state, transition
 
             train_state, env_params, env_state, agent_state, (obs, act_p, rew_p), rng = runner_state
-
-            rng, _rng = jax.random.split(rng)
-            _rng = jax.random.split(_rng, config["NUM_ENVS"])
-            obs, env_state = jax.vmap(env.reset, in_axes=(0, 0))(_rng, env_params)
-
             agent_state = agent_init_state
+
             rng, _rng = jax.random.split(rng)
             _rng = jax.random.split(_rng, config["NUM_ENVS"])
             env_params = jax.vmap(env.sample_params)(_rng)
-            runner_state = train_state, env_params, env_state, agent_state, (obs, act_p, rew_p), rng
 
+            # rng, _rng = jax.random.split(rng)
+            # _rng = jax.random.split(_rng, config["NUM_ENVS"])
+            # obs, env_state = jax.vmap(env.reset, in_axes=(0, 0))(_rng, env_params)
+
+            runner_state = train_state, env_params, env_state, agent_state, (obs, act_p, rew_p), rng
             runner_state, traj_batch = jax.lax.scan(_env_step, runner_state, None, config["NUM_STEPS"])
 
             # CALCULATE ADVANTAGE
@@ -172,7 +161,8 @@ def make_train(config):
                                                    config["UPDATE_EPOCHS"] * config["NUM_MINIBATCHES"])
             train_state = update_state[0]
             metric = traj_batch['info']
-            metric = traj_batch['rew']
+            metric['rew'] = traj_batch['rew']
+            metric = jax.tree_map(lambda x: x.mean(axis=-1), metric)
             rng = update_state[-1]
             if config.get("DEBUG"):
                 def callback(id, info):
@@ -199,12 +189,20 @@ def make_train(config):
     return train
 
 
-if __name__ == "__main__":
+def main():
+    from mdps.wrappers_mine import TimeLimit
+    import gymnax
+    from agents.basic import BasicAgent
+    import matplotlib.pyplot as plt
+    from mdps.discrete_smdp import DiscreteInit, DiscreteTransition, DiscreteObs, DiscreteReward
+    from mdps.syntheticmdp import SyntheticMDP
+    import flax.linen as nn
+
     config = {
         "LR": 2.5e-4,
-        "NUM_ENVS": 16 * 4,
+        "NUM_ENVS": 16*4,
         "NUM_STEPS": 128,
-        "TOTAL_TIMESTEPS": 16 * 5e5,
+        "TOTAL_TIMESTEPS": 100e6,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 4,
         "GAMMA": 0.99,
@@ -218,27 +216,98 @@ if __name__ == "__main__":
         "ANNEAL_LR": False,
         "DEBUG": True,
     }
-    rng = jax.random.PRNGKey(30)
-    train_fn = jax.jit(jax.vmap(make_train(config)))
-    rng, *_rng = jax.random.split(rng, 1 + 32)
-    out = train_fn(jnp.arange(len(_rng)), jnp.stack(_rng))
-    metrics = out["metrics"]
+    rng = jax.random.PRNGKey(0)
+    n_seeds = 8
+
+    # env, env_params = gymnax.make('CartPole-v1')
+    # env = FlattenObservationWrapper(env)
+    # env = LogWrapper(env)
+    # env.sample_params = lambda rng: env_params
+
+    # env = GridEnv(grid_len=8)
+    # env = TimeLimit(env, 128)
+    # env = FlattenObservationWrapper(env)
+    # env = LogWrapper(env)
+    # env_params = env.sample_params(rng)
+
+    model_init = DiscreteInit(64)
+    model_trans = DiscreteTransition(64, initializer=nn.initializers.normal(stddev=100))
+    model_obs = DiscreteObs(64, 64)
+    model_rew = DiscreteReward(64)
+    env = SyntheticMDP(None, None, 4, model_init, model_trans, model_obs, model_rew)
+    env = TimeLimit(env, 4)
+    env = LogWrapper(env)
+    env_params = env.sample_params(rng)
+
+    # network = BasicAgent(env.action_space(env_params).n)
+    network = LinearTransformerAgent(n_acts=env.action_space(env_params).n,
+                                     n_steps=config['NUM_STEPS'], n_layers=1, n_heads=4, d_embd=128)
+
+    train_fn = make_train(config, env, network)
+    train_fn = jax.jit(jax.vmap(train_fn))
+
+    ids = jnp.arange(n_seeds)
+    rng, _rng = jax.random.split(rng)
+    rngs = jax.random.split(_rng, n_seeds)
+
+    rng, _rng = jax.random.split(rng)
+    _rng = jax.random.split(_rng, n_seeds)
+
+    init_obs, init_act, init_rew = jnp.zeros((128, 8*8)), jnp.zeros((128,), dtype=jnp.int32), jnp.zeros((128,))
+    network_params = jax.vmap(partial(network.init, method=network.forward_parallel),
+                              in_axes=(0, None, None, None))(_rng, init_obs, init_act, init_rew)
+    network_params_init = network_params
+    print(jax.tree_map(lambda x: x.shape, network_params))
+    out = train_fn(ids, rngs, network_params)
+    metrics = out['metrics']
+
     print(jax.tree_map(lambda x: x.shape, metrics))
-    rets = metrics["returned_episode_returns"]  # n_seed, n_iters, n_steps, n_envs
-    import matplotlib.pyplot as plt
 
-    n_iters = rets.shape[1]
-    steps = jnp.arange(n_iters) * config["NUM_STEPS"] * config["NUM_ENVS"]
-    plt.plot(steps, jnp.mean(rets, axis=(0, 2, 3)), label='mean')
-    plt.plot(steps, jnp.median(rets, axis=(0, 2, 3)), label='median')
-    plt.plot(steps, jnp.mean(rets, axis=(2, 3)).T, c='gray', alpha=0.1)
-    plt.legend()
-    plt.ylabel('Return')
-    plt.xlabel('Env Steps')
+    # metrics['returned_episode_returns']  # seed, n_iters, n_steps, n_envs
+    # plt.plot(jnp.mean(metrics['returned_episode_returns'].mean(axis=(2, 3)), axis=0))
+    # plt.plot(jnp.median(metrics['returned_episode_returns'].mean(axis=(2, 3)), axis=0))
+    # plt.show()
+
+    plt.plot(jnp.mean(metrics['rew'][:, :10].mean(axis=(1, )), axis=0))
+    plt.plot(jnp.mean(metrics['rew'][:, -10:].mean(axis=(1, )), axis=0))
+    plt.title('training')
     plt.show()
 
-    plt.plot(jnp.mean(rets[:, :10, :, :], axis=(0, 1, 3)), label='start of training')
-    plt.plot(jnp.mean(rets[:, -10:, :, :], axis=(0, 1, 3)), label='end of training')
-    plt.legend()
-    plt.xlabel('in context steps')
+    # ----------------------------------------------------------------
+    runner_state = out['runner_state']
+    train_state = runner_state[0]
+    network_params = train_state.params
+    print(jax.tree_map(lambda x: x.shape, network_params))
+
+    # now testing agent
+    config['LR'] == 0
+    config['TOTAL_TIMESTEPS'] = 1e6
+    print(config)
+
+    env = GridEnv(grid_len=8)
+    env = TimeLimit(env, 128)
+    env = FlattenObservationWrapper(env)
+    env = LogWrapper(env)
+    env_params = env.sample_params(rng)
+
+    train_fn = make_train(config, env, network)
+    train_fn = jax.jit(jax.vmap(train_fn))
+
+    ids = jnp.arange(n_seeds)
+    rng, _rng = jax.random.split(rng)
+    rngs = jax.random.split(_rng, n_seeds)
+
+    out = train_fn(ids, rngs, network_params)
+    metrics = out['metrics']
+
+    plt.plot(jnp.mean(metrics['rew'][:, :].mean(axis=(1, )), axis=0), label='after pretraining')
+
+    out = train_fn(ids, rngs, network_params_init)
+    metrics = out['metrics']
+
+    plt.plot(jnp.mean(metrics['rew'][:, :].mean(axis=(1, )), axis=0), label='init')
+    plt.title('testing')
     plt.show()
+
+if __name__ == "__main__":
+    main()

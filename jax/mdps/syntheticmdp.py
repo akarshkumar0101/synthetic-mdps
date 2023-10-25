@@ -22,7 +22,7 @@ class SyntheticMDP(environment.Environment):
     def sample_params(self, rng):
         _rng_init, _rng_trans, _rng_obs, _rng_rew = jax.random.split(rng, 4)
 
-        params_init = self.model_init.init(_rng_init)
+        params_init = self.model_init.init(_rng_init, rng)
         state = self.model_init.apply(params_init, rng)
         if self.iid_multi_trans:
             _rng_trans = jnp.stack(jax.random.split(_rng_trans, self.n_acts))
@@ -47,7 +47,7 @@ class SyntheticMDP(environment.Environment):
         params_init, params_trans, params_obs, params_rew = params
 
         if self.iid_multi_trans:
-            state = jax.vmap(self.model_trans.apply, in_axes=(0, None))(params_trans, state)[action]
+            state = jax.vmap(self.model_trans.apply, in_axes=(0, None, None))(params_trans, state, rng)[action]
         else:
             state = self.model_trans.apply(params_trans, state, action)
         obs = self.model_obs.apply(params_obs, state)

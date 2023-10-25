@@ -4,9 +4,9 @@ from gymnax.environments import environment, spaces
 
 
 class GridEnv(environment.Environment):
-    def __init__(self, grid_len, max_steps=100):
+    def __init__(self, grid_len):
         super().__init__()
-        self.grid_len, self.max_steps = grid_len, max_steps
+        self.grid_len = grid_len
         self.obs = jnp.zeros((grid_len, grid_len), dtype=jnp.float32) - 1.
         self.action_map = jnp.array([[0, 1], [0, -1], [1, 0], [-1, 0]])
         self.n_acts = len(self.action_map)
@@ -20,34 +20,30 @@ class GridEnv(environment.Environment):
     # def default_params(self) -> EnvParams:
     #     return EnvParams()
 
-    def step_env(self, rng, state, action, params):
-        """Performs step transitions in the environment."""
-        pos, time = state['pos'], state['time']
-        pos = jnp.clip(pos + self.action_map[action], 0, self.grid_len - 1)
-        state = dict(pos=pos, time=time + 1)
-        obs = self.get_obs(state)
-        rew = self.get_rew(state, params)
-
-        done = state['time'] >= self.max_steps
-        info = {}
-        return obs, state, rew, done, info
-
     def reset_env(self, rng, params):
         """Performs resetting of environment."""
-        pos = jnp.zeros((2,), dtype=jnp.int32)
-        state = dict(pos=pos, time=jnp.array(0, dtype=jnp.int32))
+        state = jnp.zeros((2,), dtype=jnp.int32)
         obs = self.get_obs(state)
         return obs, state
 
+    def step_env(self, rng, state, action, params):
+        """Performs step transitions in the environment."""
+        state = jnp.clip(state + self.action_map[action], 0, self.grid_len - 1)
+        obs = self.get_obs(state)
+        rew = self.get_rew(state, params)
+
+        done = jnp.zeros((), dtype=jnp.bool_)
+        info = {}
+        return obs, state, rew, done, info
+
     def get_obs(self, state):
-        y, x = state['pos']
+        y, x = state
         obs = self.obs.at[y, x].set(1.)
         return obs
 
     def get_rew(self, state, params):
-        pos = state['pos']
         pos_rew = params['pos_rew']
-        d = jnp.linalg.norm((pos - pos_rew).astype(jnp.float32))
+        d = jnp.linalg.norm((state - pos_rew).astype(jnp.float32))
         return 1 / (d ** 2 + 1)
 
     @property
@@ -69,10 +65,12 @@ class GridEnv(environment.Environment):
 
 
 def main():
+    from wrappers_mine import TimeLimit
     import matplotlib.pyplot as plt
     rng = jax.random.PRNGKey(0)
 
-    env = GridEnv(4, 5)
+    env = GridEnv(4)
+    env = TimeLimit(env, 5)
 
     rng, _rng = jax.random.split(rng)
     env_params = env.sample_params(_rng)
@@ -95,7 +93,34 @@ def main():
             print(done)
 
 
+def test_rew():
+    from wrappers_mine import TimeLimit
+    from wrappers import LogWrapper
+    import matplotlib.pyplot as plt
+    rng = jax.random.PRNGKey(0)
+
+    env = GridEnv(8)
+    env = TimeLimit(env, 128)
+    env = LogWrapper(env)
+
+    rng, _rng = jax.random.split(rng)
+    env_params = env.sample_params(_rng)
+
+    rng, _rng = jax.random.split(rng)
+    obs, state = env.reset(_rng, env_params)
+
+    a = []
+    for i in range(256):
+        rng, _rng = jax.random.split(rng)
+        act = jax.random.randint(_rng, (), 0, env.n_acts)
+        rng, _rng = jax.random.split(rng)
+        obs, state, rew, done, info = env.step(_rng, state, act, env_params)
+        # a.append(rew)
+        a.append(info['returned_episode_returns'])
+    a = jnp.stack(a)
+    print(a)
+    # print(info)
 
 
 if __name__ == '__main__':
-    main()
+    test_rew()

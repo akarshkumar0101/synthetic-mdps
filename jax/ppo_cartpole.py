@@ -4,12 +4,10 @@ import optax
 from flax.training.train_state import TrainState
 import distrax
 import gymnax
-from wrappers import LogWrapper, FlattenObservationWrapper
+from mdps.wrappers import LogWrapper, FlattenObservationWrapper
 from einops import rearrange
 from functools import partial
 
-
-from agents.basic import BasicAgent
 from agents.linear_transformer import LinearTransformerAgent
 
 
