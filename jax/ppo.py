@@ -297,17 +297,138 @@ def main():
     rng, _rng = jax.random.split(rng)
     rngs = jax.random.split(_rng, n_seeds)
 
+    out = train_fn(ids, rngs, network_params_init)
+    metrics = out['metrics']
+    plt.plot(jnp.mean(metrics['rew'][:, :].mean(axis=(1, )), axis=0), label='init')
+
     out = train_fn(ids, rngs, network_params)
     metrics = out['metrics']
-
     plt.plot(jnp.mean(metrics['rew'][:, :].mean(axis=(1, )), axis=0), label='after pretraining')
+
+    plt.title('testing')
+    plt.legend()
+    plt.show()
+
+def main():
+    from mdps.wrappers_mine import TimeLimit
+    import gymnax
+    from agents.basic import BasicAgent
+    import matplotlib.pyplot as plt
+    from mdps.discrete_smdp import DiscreteInit, DiscreteTransition, DiscreteObs, DiscreteReward
+    from mdps.syntheticmdp import SyntheticMDP
+    import flax.linen as nn
+
+    config = {
+        "LR": 2.5e-4,
+        "NUM_ENVS": 16*4,
+        "NUM_STEPS": 128,
+        "TOTAL_TIMESTEPS": 100e6,
+        "UPDATE_EPOCHS": 4,
+        "NUM_MINIBATCHES": 4,
+        "GAMMA": 0.99,
+        "GAE_LAMBDA": 0.95,
+        "CLIP_EPS": 0.2,
+        "ENT_COEF": 0.01,
+        "VF_COEF": 0.5,
+        "MAX_GRAD_NORM": 0.5,
+        "ACTIVATION": "tanh",
+        "ENV_NAME": "CartPole-v1",
+        "ANNEAL_LR": False,
+        "DEBUG": True,
+    }
+    rng = jax.random.PRNGKey(0)
+    n_seeds = 8
+
+    # env, env_params = gymnax.make('CartPole-v1')
+    # env = FlattenObservationWrapper(env)
+    # env = LogWrapper(env)
+    # env.sample_params = lambda rng: env_params
+
+    # env = GridEnv(grid_len=8)
+    # env = TimeLimit(env, 128)
+    # env = FlattenObservationWrapper(env)
+    # env = LogWrapper(env)
+    # env_params = env.sample_params(rng)
+
+    model_init = DiscreteInit(64)
+    model_trans = DiscreteTransition(64, initializer=nn.initializers.normal(stddev=100))
+    model_obs = DiscreteObs(64, 64)
+    model_rew = DiscreteReward(64)
+    env = SyntheticMDP(None, None, 4, model_init, model_trans, model_obs, model_rew)
+    env = TimeLimit(env, 4)
+    env = LogWrapper(env)
+    env_params = env.sample_params(rng)
+
+    # network = BasicAgent(env.action_space(env_params).n)
+    network = LinearTransformerAgent(n_acts=env.action_space(env_params).n,
+                                     n_steps=config['NUM_STEPS'], n_layers=1, n_heads=4, d_embd=128)
+
+    train_fn = make_train(config, env, network)
+    train_fn = jax.jit(jax.vmap(train_fn))
+
+    ids = jnp.arange(n_seeds)
+    rng, _rng = jax.random.split(rng)
+    rngs = jax.random.split(_rng, n_seeds)
+
+    rng, _rng = jax.random.split(rng)
+    _rng = jax.random.split(_rng, n_seeds)
+
+    init_obs, init_act, init_rew = jnp.zeros((128, 8*8)), jnp.zeros((128,), dtype=jnp.int32), jnp.zeros((128,))
+    network_params = jax.vmap(partial(network.init, method=network.forward_parallel),
+                              in_axes=(0, None, None, None))(_rng, init_obs, init_act, init_rew)
+    network_params_init = network_params
+    print(jax.tree_map(lambda x: x.shape, network_params))
+    # out = train_fn(ids, rngs, network_params)
+    # metrics = out['metrics']
+
+    # print(jax.tree_map(lambda x: x.shape, metrics))
+
+    # metrics['returned_episode_returns']  # seed, n_iters, n_steps, n_envs
+    # plt.plot(jnp.mean(metrics['returned_episode_returns'].mean(axis=(2, 3)), axis=0))
+    # plt.plot(jnp.median(metrics['returned_episode_returns'].mean(axis=(2, 3)), axis=0))
+    # plt.show()
+
+    # plt.plot(jnp.mean(metrics['rew'][:, :10].mean(axis=(1, )), axis=0))
+    # plt.plot(jnp.mean(metrics['rew'][:, -10:].mean(axis=(1, )), axis=0))
+    # plt.title('training')
+    # plt.show()
+
+    # ----------------------------------------------------------------
+    # runner_state = out['runner_state']
+    # train_state = runner_state[0]
+    # network_params = train_state.params
+    # print(jax.tree_map(lambda x: x.shape, network_params))
+
+    # now testing agent
+    config['LR'] == 0
+    config['TOTAL_TIMESTEPS'] = 1e6
+    print(config)
+
+    env = GridEnv(grid_len=8)
+    env = TimeLimit(env, 128)
+    env = FlattenObservationWrapper(env)
+    env = LogWrapper(env)
+    env_params = env.sample_params(rng)
+
+    train_fn = make_train(config, env, network)
+    train_fn = jax.jit(jax.vmap(train_fn))
+
+    ids = jnp.arange(n_seeds)
+    rng, _rng = jax.random.split(rng)
+    rngs = jax.random.split(_rng, n_seeds)
 
     out = train_fn(ids, rngs, network_params_init)
     metrics = out['metrics']
-
     plt.plot(jnp.mean(metrics['rew'][:, :].mean(axis=(1, )), axis=0), label='init')
+
+    # out = train_fn(ids, rngs, network_params)
+    # metrics = out['metrics']
+    # plt.plot(jnp.mean(metrics['rew'][:, :].mean(axis=(1, )), axis=0), label='after pretraining')
+
     plt.title('testing')
+    plt.legend()
     plt.show()
+
 
 if __name__ == "__main__":
     main()

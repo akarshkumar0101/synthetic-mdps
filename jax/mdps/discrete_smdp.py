@@ -43,7 +43,8 @@ class DiscreteObs(nn.Module):
 
 class DiscreteReward(nn.Module):
     n_states: int
-    initializer: nn.initializers.Initializer = nn.initializers.normal(stddev=1.)
+    # initializer: nn.initializers.Initializer = nn.initializers.normal(stddev=1.)
+    initializer: nn.initializers.Initializer = nn.initializers.uniform(scale=1.)
 
     def setup(self):
         self.rew_matrix = self.param('rew_matrix', self.initializer, (self.n_states,))

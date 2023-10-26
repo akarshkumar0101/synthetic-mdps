@@ -123,7 +123,9 @@ class LinearTransformerAgent(nn.Module):
         self.blocks = [Block(n_heads=self.n_heads, d_embd=self.d_embd) for _ in range(self.n_layers)]
         self.ln = nn.LayerNorm()
 
-        self.actor = nn.Dense(features=self.n_acts)
+        self.actor = nn.Dense(features=self.n_acts,
+                              kernel_init=nn.initializers.orthogonal(0.01),
+                              bias_init=nn.initializers.constant(0.0))
         self.critic = nn.Dense(features=1)
 
     def forward_parallel(self, obs, action, reward):
