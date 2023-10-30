@@ -4,6 +4,9 @@ from gymnax.environments import environment, spaces
 import flax.linen as nn
 
 
+def eye(key, shape, dtype):
+    return jnp.eye(*shape, dtype=dtype)
+
 
 class DiscreteInit(nn.Module):
     n_states: int
@@ -107,6 +110,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-
-
+    pass
+    # main()
