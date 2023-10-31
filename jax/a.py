@@ -27,7 +27,7 @@ def main():
         "LR": 2.5e-4,
         "NUM_ENVS": 16 * 4,
         "NUM_STEPS": 128,
-        "TOTAL_TIMESTEPS": 16 * 5e5,
+        "TOTAL_TIMESTEPS": 64*5e5,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 4,
         "GAMMA": 0.99,
@@ -41,6 +41,8 @@ def main():
         "ANNEAL_LR": False,
         "DEBUG": True,
     }
+    from jax.random import split
+
     rng = jax.random.PRNGKey(0)
     n_seeds = 8
 
@@ -53,13 +55,14 @@ def main():
     env = FlattenObservationWrapper(env)
     env = LogWrapper(env)
 
-    # model_init = DiscreteInit(64)
-    # model_trans = DiscreteTransition(64, initializer=nn.initializers.normal(stddev=100))
-    # model_obs = DiscreteObs(64, 64, initializer=mdps.discrete_smdp.eye)
-    # model_rew = DiscreteReward(64)
-    # env_syn = SyntheticMDP(None, None, 4, model_init, model_trans, model_obs, model_rew)
-    # env_syn = TimeLimit(env_syn, 4)
-    # env_syn = LogWrapper(env_syn)
+    model_init = DiscreteInit(64)
+    model_trans = DiscreteTransition(64, initializer=nn.initializers.normal(stddev=100))
+    model_obs = DiscreteObs(64, 64, initializer=mdps.discrete_smdp.eye)
+    # model_obs = DiscreteObs(64, 64)
+    model_rew = DiscreteReward(64)
+    env_syn = SyntheticMDP(None, None, 4, model_init, model_trans, model_obs, model_rew)
+    env_syn = TimeLimit(env_syn, 4)
+    env_syn = LogWrapper(env_syn)
 
     # network = BasicAgent(env.action_space(None).n)
     network = LinearTransformerAgent(n_acts=env.action_space(None).n,
@@ -86,7 +89,7 @@ def main():
         # rets[md].append(traj_batch['info']['returned_episode_returns'].mean())
         rews[md].append(traj_batch['rew'].mean(axis=-1))
 
-    train_fn = make_train(config, env, network, callback=callback, reset_env_iter=True)
+    train_fn = make_train(config, env_syn, network, callback=callback, reset_env_iter=True)
     train_fn = jax.jit(jax.vmap(train_fn))
 
     out = train_fn(mds, rngs, network_params)
@@ -97,7 +100,8 @@ def main():
     rets = rews.sum(axis=-1)  # (n_seeds, n_iters)
     rews_start, rews_end = rews[:, :10, :].mean(axis=1), rews[:, -10:, :].mean(axis=1)  # (n_seeds, n_steps)
     print(rets.shape)
-    print(rews.shape)
+    print(rews.shape, rews_start.shape, rews_end.shape)
+    network_params_trained = out['runner_state'][1].params
 
     plt.figure(figsize=(10, 5))
     plt.subplot(121)
@@ -117,6 +121,36 @@ def main():
 
     plt.show()
 
+    config['LR'] = 0.
+    config['TOTAL_TIMESTEPS'] = 5e5
+
+    rews = [[] for _ in range(n_seeds)]
+    pbar = tqdm(total=config["TOTAL_TIMESTEPS"])
+
+    def callback(md, i_iter, traj_batch):
+        if md == 0:
+            pbar.update(config["NUM_ENVS"] * config["NUM_STEPS"])
+        rews[md].append(traj_batch['rew'].mean(axis=-1))
+
+    train_fn = make_train(config, env, network, callback=callback, reset_env_iter=True)
+    train_fn = jax.jit(jax.vmap(train_fn))
+    out = train_fn(mds, rngs, network_params_trained)
+
+    rews = jnp.array(rews)  # (n_seeds, n_iters, n_steps)
+
+    # plt.subplot(122)
+    plt.plot(jnp.mean(rews.mean(axis=1), axis=0), c=[.5, 0, 0, 1], label='mean end of training')
+    plt.plot(rews.mean(axis=1).T, c=[.5, 0, 0, .1])
+    plt.title('reward vs in-context steps')
+    plt.legend()
+    plt.show()
+
 
 if __name__ == '__main__':
     main()
+
+
+"""
+Transfer tasks:
+- 
+"""

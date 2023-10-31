@@ -9,7 +9,7 @@ from functools import partial
 import mdps.wrappers
 
 
-def make_train(config, env, network, callback=None, reset_env_iter=False):
+def make_train(config, env, network, callback=None, reset_env_iter=False, return_metric='rew'):
     config["NUM_UPDATES"] = (config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"])
     config["MINIBATCH_SIZE"] = (config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"])
 
@@ -172,7 +172,7 @@ def make_train(config, env, network, callback=None, reset_env_iter=False):
                 jax.debug.callback(callback, md, i_iter, traj_batch)
 
             runner_state = (i_iter + 1, train_state, env_params, env_state, agent_state, (obs, act_p, rew_p), rng)
-            return runner_state, None  # metric
+            return runner_state, (traj_batch['rew'] if return_metric == 'rew' else None)
 
         agent_state = jax.tree_map(lambda x: x, agent_init_state)  # copy
         rng, _rng = jax.random.split(rng)

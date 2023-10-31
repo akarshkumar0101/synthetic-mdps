@@ -8,7 +8,7 @@ class GridEnv(environment.Environment):
         super().__init__()
         self.grid_len = grid_len
         self.start_state = start_state
-        self.obs = jnp.zeros((grid_len, grid_len), dtype=jnp.float32) - 1.
+        self.obs = jnp.zeros((grid_len, grid_len), dtype=jnp.float32)
         self.action_map = jnp.array([[0, 1], [0, -1], [1, 0], [-1, 0]])
         self.n_acts = len(self.action_map)
 
@@ -49,8 +49,8 @@ class GridEnv(environment.Environment):
         return obs
 
     def get_rew(self, state, params):
-        pos_rew = params['pos_rew']
-        d = jnp.linalg.norm((state - pos_rew).astype(jnp.float32))
+        a, b = state, params['pos_rew']
+        d = jnp.linalg.norm(a-b, axis=-1)
         return 1 / (d ** 2 + 1)
     # 1/(d**2+1)
 
