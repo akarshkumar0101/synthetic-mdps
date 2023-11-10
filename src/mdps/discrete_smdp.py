@@ -35,7 +35,7 @@ class DiscreteTransition(nn.Module):
 class DiscreteObs(nn.Module):
     n_states: int
     d_obs: int
-    initializer: nn.initializers.Initializer = nn.initializers.normal(stddev=1.)
+    initializer: nn.initializers.Initializer = eye
 
     def setup(self):
         self.embed = nn.Embed(self.n_states, self.d_obs, embedding_init=self.initializer)
@@ -43,11 +43,17 @@ class DiscreteObs(nn.Module):
     def __call__(self, state):
         return self.embed(state)
 
+    def observation_space(self, params):
+        return spaces.Box(-1, 1, (self.d_obs,), dtype=jnp.float32)
+
 
 class DiscreteReward(nn.Module):
     n_states: int
-    # initializer: nn.initializers.Initializer = nn.initializers.normal(stddev=1.)
-    initializer: nn.initializers.Initializer = nn.initializers.uniform(scale=1.)
+    # initializer: nn.initializers.Initializer = nn.initializers.uniform(scale=1.)
+    initializer: nn.initializers.Initializer = nn.initializers.uniform(scale=.24)
+
+    # def initializer(self, rng, shape, dtype):
+    #     return jax.random.uniform(rng, shape, dtype=dtype)
 
     def setup(self):
         self.rew_matrix = self.param('rew_matrix', self.initializer, (self.n_states,))

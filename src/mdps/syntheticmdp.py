@@ -5,11 +5,9 @@ import flax.linen as nn
 
 
 class SyntheticMDP(environment.Environment):
-    def __init__(self, state_shape, obs_shape, n_acts,
+    def __init__(self, n_acts,
                  model_init, model_trans, model_obs, model_rew, iid_multi_trans=True):
         super().__init__()
-        self.state_shape = state_shape
-        self.obs_shape = obs_shape
         self.n_acts = n_acts
         self.iid_multi_trans = iid_multi_trans
         assert self.iid_multi_trans  # make sure other case is implemented properly
@@ -32,11 +30,13 @@ class SyntheticMDP(environment.Environment):
             params_trans = self.model_trans.init(_rng_trans, state, action, rng)
         params_obs = self.model_obs.init(_rng_obs, state)
         params_rew = self.model_rew.init(_rng_rew, state)
-        return params_init, params_trans, params_obs, params_rew
+        return dict(params_init=params_init, params_trans=params_trans,
+                    params_obs=params_obs, params_rew=params_rew)
 
     def reset_env(self, rng, params):
         """Performs resetting of environment."""
-        params_init, params_trans, params_obs, params_rew = params
+        params_init, params_trans = params['params_init'], params['params_trans']
+        params_obs, params_rew = params['params_obs'], params['params_rew']
 
         state = self.model_init.apply(params_init, rng)
         obs = self.model_obs.apply(params_obs, state)
@@ -44,7 +44,8 @@ class SyntheticMDP(environment.Environment):
 
     def step_env(self, rng, state, action, params):
         """Performs step transitions in the environment."""
-        params_init, params_trans, params_obs, params_rew = params
+        params_init, params_trans = params['params_init'], params['params_trans']
+        params_obs, params_rew = params['params_obs'], params['params_rew']
 
         if self.iid_multi_trans:
             state = jax.vmap(self.model_trans.apply, in_axes=(0, None, None))(params_trans, state, rng)[action]
@@ -68,7 +69,8 @@ class SyntheticMDP(environment.Environment):
         return spaces.Discrete(self.n_acts)
 
     def observation_space(self, params):
-        return spaces.Box(-1, 1, self.obs_shape, dtype=jnp.float32)
+        params_obs = params['params_obs']
+        return self.model_obs.observation_space(params_obs)
 
 # class MultiActionFunction(nn.Module):
 #     model_class: nn.Module

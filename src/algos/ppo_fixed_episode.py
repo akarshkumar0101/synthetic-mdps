@@ -6,10 +6,8 @@ import distrax
 from einops import rearrange
 from functools import partial
 
-import mdps.wrappers
 
-
-def make_train(config, env, network, callback=None, reset_env_iter=False, return_metric='rew'):
+def make_train(config, env, network, callback=None, reset_env_iter=False, return_metric='rew', zero_agent_rew=False):
     config["NUM_UPDATES"] = (config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"])
     config["MINIBATCH_SIZE"] = (config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"])
 
@@ -55,8 +53,9 @@ def make_train(config, env, network, callback=None, reset_env_iter=False, return
                 i_iter, train_state, env_params, env_state, agent_state, (obs, act_p, rew_p), rng = runner_state
 
                 # SELECT ACTION
+                rew_p_agent = jnp.zeros_like(rew_p) if zero_agent_rew else rew_p
                 agent_state_n, (logits, value) = forward_recurrent(train_state.params,
-                                                                   agent_state, (obs, act_p, rew_p))
+                                                                   agent_state, (obs, act_p, rew_p_agent))
                 rng, _rng = jax.random.split(rng)
                 pi = distrax.Categorical(logits=logits)
                 act = pi.sample(seed=_rng)
@@ -163,16 +162,25 @@ def make_train(config, env, network, callback=None, reset_env_iter=False, return
             update_state, loss_info = jax.lax.scan(_update_batch, update_state, None,
                                                    config["UPDATE_EPOCHS"] * config["NUM_MINIBATCHES"])
             train_state = update_state[0]
-            metric = traj_batch['info']
-            metric['rew'] = traj_batch['rew']
-            metric = jax.tree_map(lambda x: x.mean(axis=-1), metric)
+            # metric = traj_batch['info']
+            # metric['rew'] = traj_batch['rew']
+            # metric = jax.tree_map(lambda x: x.mean(axis=-1), metric)
             rng = update_state[-1]
 
             if callback is not None:
                 jax.debug.callback(callback, md, i_iter, traj_batch)
 
             runner_state = (i_iter + 1, train_state, env_params, env_state, agent_state, (obs, act_p, rew_p), rng)
-            return runner_state, (traj_batch['rew'] if return_metric == 'rew' else None)
+
+            if return_metric == 'all':
+                metric_to_return = traj_batch
+            elif return_metric == 'rew':
+                metric_to_return = traj_batch['rew']
+            elif return_metric == 'rew_mean':
+                metric_to_return = traj_batch['rew'].mean(axis=-1)
+            else:
+                raise NotImplementedError
+            return runner_state, metric_to_return
 
         agent_state = jax.tree_map(lambda x: x, agent_init_state)  # copy
         rng, _rng = jax.random.split(rng)

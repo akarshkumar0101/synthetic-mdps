@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 from gymnax import EnvParams
 from gymnax.environments import environment, spaces
-from wrappers import GymnaxWrapper
+from .wrappers import GymnaxWrapper
 
 """
 This class doesn't work because Gymnax wrappers
@@ -55,5 +55,48 @@ class TimeLimit(environment.Environment):
         done = jnp.logical_or(done, state['time'] >= self.max_steps)
         return obs, state, reward, done, info
 
-    def action_space(self, params: EnvParams):
+    def action_space(self, params):
         return self._env.action_space(params)
+
+    def observation_space(self, params):
+        return self._env.observation_space(params)
+
+
+class RandomlyProjectObservation(GymnaxWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+
+    def sample_params(self, rng):
+        rng, _rng = jax.random.split(rng)
+        env_params = self._env.sample_params(rng)
+        d_obs = self._env.observation_space(env_params).shape[0]
+        A = jax.random.normal(_rng, (d_obs, d_obs))
+        return {'env_params': env_params, 'A': A}
+
+    def reset(self, key, params):
+        obs, state = self._env.reset(key, params['env_params'])
+        obs = params['A'] @ obs
+        return obs, state
+
+    def step(self, key, state, action, params):
+        obs, state, reward, done, info = self._env.step(key, state, action, params['env_params'])
+        obs = params['A'] @ obs
+        return obs, state, reward, done, info
+
+
+class NoReward(GymnaxWrapper):
+    def step(self, key, state, action, params):
+        obs, state, reward, done, info = self._env.step(key, state, action, params)
+        reward = jnp.zeros_like(reward)
+        return obs, state, reward, done, info
+
+
+class RewardTransform(GymnaxWrapper):
+    def __init__(self, env, reward_transform):
+        super().__init__(env)
+        self.reward_transform = reward_transform
+
+    def step(self, key, state, action, params):
+        obs, state, reward, done, info = self._env.step(key, state, action, params)
+        reward = self.reward_transform(reward)
+        return obs, state, reward, done, info

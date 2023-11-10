@@ -7,6 +7,7 @@ class GridEnv(environment.Environment):
     def __init__(self, grid_len, start_state='random'):
         super().__init__()
         self.grid_len = grid_len
+        self.obs_shape = (grid_len, grid_len)
         self.start_state = start_state
         self.obs = jnp.zeros((grid_len, grid_len), dtype=jnp.float32)
         self.action_map = jnp.array([[0, 1], [0, -1], [1, 0], [-1, 0]])

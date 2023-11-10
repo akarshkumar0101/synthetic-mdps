@@ -41,3 +41,24 @@ class BasicAgent(nn.Module):
         val = self.seq_critic(obs)
         # pi = distrax.Categorical(logits=logits)
         return logits, val[..., 0]
+
+
+class RandomAgent(nn.Module):
+    n_acts: int
+
+    def setup(self):
+        pass
+
+    def get_init_state(self, rng):
+        return jnp.zeros(())
+
+    def forward_recurrent(self, state, oar):  # shape: (...)
+        logits = jnp.zeros((self.n_acts,))
+        val = jnp.zeros((1,))
+        return state, (logits, val[..., 0])
+
+    def forward_parallel(self, obs, act_p, rew_p):  # shape: (n_steps, ...)
+        n_steps = act_p.shape[0]
+        logits = jnp.zeros((n_steps, self.n_acts,))
+        val = jnp.zeros((n_steps, 1,))
+        return logits, val[..., 0]
