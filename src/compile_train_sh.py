@@ -22,10 +22,13 @@ def main():
 
     for n_acts in [2, 3, 4]:
         for tl in [4, 128]:
-            denv = f"env=dsmdp;n_states=64;n_acts={n_acts};d_obs=64;rpo=64;tl={tl}"
+            denvu = f"env=dsmdp;n_states=64;n_acts={n_acts};d_obs=64;rdist=U;rpo=64;tl={tl}"
+            denvn = f"env=dsmdp;n_states=64;n_acts={n_acts};d_obs=64;rdist=N;rpo=64;tl={tl}"
+
             cenv = f"env=csmdp;d_state=8;n_acts={n_acts};d_obs=64;delta=F;rpo=64;tl={tl}"
             cenvd = f"env=csmdp;d_state=8;n_acts={n_acts};d_obs=64;delta=T;rpo=64;tl={tl}"
-            envs_pre[denv] = n_acts
+            envs_pre[denvu] = n_acts
+            envs_pre[denvn] = n_acts
             envs_pre[cenv] = n_acts
             envs_pre[cenvd] = n_acts
 
@@ -43,7 +46,7 @@ def main():
         "save_dir": None,
         "n_envs": 64,
         "n_steps": 128,
-        "total_timesteps": 1e6
+        "total_timesteps": 100e6
     }
     configs = []
     for env_pre in envs_pre:
@@ -61,7 +64,7 @@ def main():
         "load_dir": None,
         "n_envs": 64,
         "n_steps": 128,
-        "total_timesteps": 1e6
+        "total_timesteps": 100e6
     }
 
     configs = []
@@ -71,7 +74,7 @@ def main():
                 continue
             c = config.copy()
             c["env"] = env_trans
-            c["save_dir"] = f"../data/{env_trans}"
+            c["save_dir"] = f"../data/transfer/{env_trans}/{env_pre}"
             c["load_dir"] = f"../data/{env_pre}"
             configs.append(c)
     txt_trans = experiment_utils.create_command_txt_from_configs(configs, python_command='python train.py')

@@ -79,7 +79,7 @@ def create_env(env_str):
     elif config['env'] == 'dsmdp':
         n_states, d_obs, n_acts = int(config['n_states']), int(config['d_obs']), int(config['n_acts'])
         if config['rdist'] == 'U':
-            def rdist(key, shape, dtype):
+            def rdist(key, shape, dtype=float):
                 return jax.random.uniform(key, shape, dtype=dtype, minval=-jnp.sqrt(3), maxval=jnp.sqrt(3))
         elif config['rdist'] == 'N':
             rdist = nn.initializers.normal(stddev=1.)
@@ -242,7 +242,7 @@ def train_agent(rng, config, env, agent, agent_params_init, n_seeds):
 def eval_agent(rng, config, env, agent, agent_params_init, n_seeds):
     config = config.copy()
     config['LR'] = 0.
-    config['TOTAL_TIMESTEPS'] = 3e6
+    config['TOTAL_TIMESTEPS'] = 5e6
     config['UPDATE_EPOCHS'] = 0
     _, rews = train_agent(rng, config, env, agent, agent_params_init, n_seeds)
     return rews
