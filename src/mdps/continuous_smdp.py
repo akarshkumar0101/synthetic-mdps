@@ -21,6 +21,7 @@ class ContinuousInit(nn.Module):
 
 class ContinuousMatrixTransition(nn.Module):
     d_state: int
+    delta: True
     initializer: nn.initializers.Initializer = nn.initializers.normal(stddev=1.)
     use_bias: bool = False
     normalize: bool = True
@@ -29,7 +30,7 @@ class ContinuousMatrixTransition(nn.Module):
         self.trans_matrix = nn.Dense(self.d_state, kernel_init=self.initializer, use_bias=self.use_bias)
 
     def __call__(self, state, rng):
-        state_n = state+self.trans_matrix(state)
+        state_n = state + self.trans_matrix(state) if self.delta else self.trans_matrix(state)
         if self.normalize:
             state_n = state_n / jnp.linalg.norm(state_n)
         return state_n
@@ -63,7 +64,8 @@ class ContinuousReward(nn.Module):
 
     def __call__(self, state):
         rew = jnp.dot(state, self.rew_vec)
-        return (rew+1)/2.
+        rew = rew * jnp.sqrt(self.d_state)
+        return rew
 
 
 def main():

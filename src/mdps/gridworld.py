@@ -39,6 +39,7 @@ class GridEnv(environment.Environment):
         state = jnp.clip(state + self.action_map[action], 0, self.grid_len - 1)
         obs = self.get_obs(state)
         rew = self.get_rew(state, params)
+        rew = (rew - 0.12123) / 0.16537
 
         done = jnp.zeros((), dtype=jnp.bool_)
         info = {}

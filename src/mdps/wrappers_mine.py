@@ -63,14 +63,15 @@ class TimeLimit(environment.Environment):
 
 
 class RandomlyProjectObservation(GymnaxWrapper):
-    def __init__(self, env):
+    def __init__(self, env, d_obs):
         super().__init__(env)
+        self.d_obs = d_obs
 
     def sample_params(self, rng):
         rng, _rng = jax.random.split(rng)
         env_params = self._env.sample_params(rng)
         d_obs = self._env.observation_space(env_params).shape[0]
-        A = jax.random.normal(_rng, (d_obs, d_obs))
+        A = jax.random.normal(_rng, (self.d_obs, d_obs))
         return {'env_params': env_params, 'A': A}
 
     def reset(self, key, params):

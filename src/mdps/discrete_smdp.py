@@ -49,8 +49,7 @@ class DiscreteObs(nn.Module):
 
 class DiscreteReward(nn.Module):
     n_states: int
-    # initializer: nn.initializers.Initializer = nn.initializers.uniform(scale=1.)
-    initializer: nn.initializers.Initializer = nn.initializers.uniform(scale=.24)
+    initializer: nn.initializers.Initializer = nn.initializers.uniform(scale=1.)
 
     # def initializer(self, rng, shape, dtype):
     #     return jax.random.uniform(rng, shape, dtype=dtype)

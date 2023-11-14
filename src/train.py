@@ -4,24 +4,22 @@ import pickle
 from functools import partial
 
 import flax.linen as nn
-import gymnax
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from jax.random import split
 from tqdm.auto import tqdm
 
-import mdps.discrete_smdp
 from agents.basic import BasicAgent, RandomAgent
 from agents.linear_transformer import LinearTransformerAgent
 from algos.ppo_fixed_episode import make_train
 from mdps.continuous_smdp import ContinuousInit, ContinuousMatrixTransition, ContinuousMatrixObs, ContinuousReward
 from mdps.discrete_smdp import DiscreteInit, DiscreteTransition, DiscreteObs, DiscreteReward
 from mdps.gridworld import GridEnv
+from mdps.natural_mdps import CartPole, MountainCar, Acrobot
 from mdps.syntheticmdp import SyntheticMDP
 from mdps.wrappers import FlattenObservationWrapper, LogWrapper
 from mdps.wrappers_mine import TimeLimit, RandomlyProjectObservation
-from mdps.mountain_car import MountainCar
 
 parser = argparse.ArgumentParser()
 # experiment args
@@ -29,8 +27,10 @@ parser.add_argument("--n_seeds", type=int, default=1)
 parser.add_argument("--agent", type=str, default="linear_transformer")
 parser.add_argument("--env", type=str, default="gridworld")
 
-parser.add_argument("--save_fig", type=str, default=None)
-parser.add_argument("--save_agent", type=str, default=None)
+# parser.add_argument("--save_fig", type=str, default=None)
+parser.add_argument("--load_dir", type=str, default=None)
+parser.add_argument("--save_dir", type=str, default=None)
+parser.add_argument("--train", type=str, default='True')
 
 # PPO args
 parser.add_argument("--lr", type=float, default=2.5e-4)
@@ -50,46 +50,65 @@ parser.add_argument("--max_grad_norm", type=float, default=0.5)
 
 def create_env(env_str):
     """
-    "env=gridenv;grid_len=8;fobs=T;rpo=F;tl=128"
+    Pretraining Tasks:
+    "env=dsmdp;n_states=64;n_acts=4;d_obs=64;rpo=64;tl=4"
+    "env=dsmdp;n_states=64;n_acts=4;d_obs=64;rpo=64;tl=128"
 
-    "env=dsmdp;n_states=64;d_obs=64;n_acts=4;rpo=F;tl=128"
+    "env=csmdp;d_state=8;n_acts=4;d_obs=64;delta=F;rpo=64;tl=128"
+    "env=csmdp;d_state=8;n_acts=4;d_obs=64;delta=T;rpo=64;tl=128"
+
+    Transfer tasks:
+    "env=gridenv;grid_len=8;fobs=T;rpo=64;tl=128"
+    "env=cartpole;fobs=T;rpo=64;tl=128"
+    "env=mountaincar;fobs=T;rpo=64;tl=128"
+    "env=acrobot;fobs=T;rpo=64;tl=128"
 
     """
     config = dict([sub.split('=') for sub in env_str.split(';')])
 
-    if config['env'] == 'cartpole':
-        env, env_params = gymnax.make('CartPole-v1')
-        env.sample_params = lambda rng: env_params
+    if config['env'] == "cartpole":
+        env = CartPole()
+    elif config['env'] == "mountaincar":
+        env = MountainCar()
+    elif config['env'] == "acrobot":
+        env = Acrobot()
     elif config['env'] == 'gridenv':
         grid_len = int(config['grid_len'])
         env = GridEnv(grid_len, start_state='random')
-    elif config['env'] == 'mountaincar':
-        env = MountainCar()
-        env_params = env.default_params
-        env.sample_params = lambda rng: env_params
+
     elif config['env'] == 'dsmdp':
         n_states, d_obs, n_acts = int(config['n_states']), int(config['d_obs']), int(config['n_acts'])
+        if config['rdist'] == 'U':
+            def rdist(key, shape, dtype):
+                return jax.random.uniform(key, shape, dtype=dtype, minval=-jnp.sqrt(3), maxval=jnp.sqrt(3))
+        elif config['rdist'] == 'N':
+            rdist = nn.initializers.normal(stddev=1.)
+        # elif config['rdist'] == 'U.24':
+        #     rdist = nn.initializers.uniform(scale=.24)
+
         model_init = DiscreteInit(n_states)
         model_trans = DiscreteTransition(n_states, initializer=nn.initializers.normal(stddev=100))
         model_obs = DiscreteObs(n_states, d_obs)
-        model_rew = DiscreteReward(n_states)
+        model_rew = DiscreteReward(n_states, initializer=rdist)
         env = SyntheticMDP(n_acts, model_init, model_trans, model_obs, model_rew)
     elif config['env'] == 'csmdp':
         d_state, d_obs, n_acts = int(config['d_state']), int(config['d_obs']), int(config['n_acts'])
+        delta = config['delta'] == 'T'
         model_init = ContinuousInit(d_state)
-        model_trans = ContinuousMatrixTransition(d_state)
+        model_trans = ContinuousMatrixTransition(d_state, delta)
         model_obs = ContinuousMatrixObs(d_state, d_obs)
         model_rew = ContinuousReward(d_state)
         env = SyntheticMDP(n_acts, model_init, model_trans, model_obs, model_rew)
     else:
         raise NotImplementedError
     if 'tl' in config:
-        env = TimeLimit(env, int(config['tl']))  # this has to go before other ones because it environemnt, not wrapper
+        env = TimeLimit(env, int(config['tl']))  # this has to go before other ones because environment, not wrapper
 
     if 'fobs' in config and config['fobs'] == 'T':
         env = FlattenObservationWrapper(env)
-    if 'rpo' in config and config['rpo'] == 'T':
-        env = RandomlyProjectObservation(env)
+    if 'rpo' in config and int(config['rpo']) > 0:
+        env = RandomlyProjectObservation(env, d_obs=int(config['rpo']))
+
     env = LogWrapper(env)
     return env
 
@@ -116,55 +135,83 @@ def main(args):
 
     rng = jax.random.PRNGKey(0)
     n_seeds = args.n_seeds
-
     n_steps = args.n_steps
     d_obs = 64
 
     env = create_env(args.env)
     agent = create_agent(env, args.agent, n_steps)
 
-    init_obs, init_act, init_rew = jnp.zeros((n_steps, d_obs)), jnp.zeros((n_steps,), dtype=jnp.int32), jnp.zeros(
-        (n_steps,))
-    rng, _rng = jax.random.split(rng)
-    _rng = jax.random.split(_rng, n_seeds)
-    agent_params = jax.vmap(partial(agent.init, method=agent.forward_parallel),
-                            in_axes=(0, None, None, None))(_rng, init_obs, init_act, init_rew)
+    rng, _rng = split(rng)
+    agent_params_init = get_init_agent_params(_rng, agent, n_seeds, n_steps, d_obs)
 
-    # -------------------- PRETRAINING --------------------
-    agent_params_trained, rews = train_agent(rng, config, env, agent, agent_params, n_seeds)
-    # rews.shape is (n_seeds, n_iters, n_steps)
-    rets = rews.sum(axis=-1)  # (n_seeds, n_iters)
-    rews_start, rews_end = rews[:, :10, :].mean(axis=1), rews[:, -10:, :].mean(axis=1)  # (n_seeds, n_steps)
+    rews_init = eval_agent(rng, config, env, agent, agent_params_init, n_seeds)
+    rews_init = rews_init.mean(axis=1)  # (n_seeds, n_steps)
 
-    if args.save_fig is not None:
+    if args.train == 'True':
+        agent_params_trained, rews = train_agent(rng, config, env, agent, agent_params_init, n_seeds)
+        # rews.shape is (n_seeds, n_iters, n_steps)
+        rets = rews.sum(axis=-1)  # (n_seeds, n_iters)
+    else:
+        assert args.load_dir is not None
+        with open(f'{args.load_dir}/agent.pkl', 'rb') as f:
+            agent_params_trained = pickle.load(f)
+
+    rews_trained = eval_agent(rng, config, env, agent, agent_params_trained, n_seeds)
+    rews_trained = rews_trained.mean(axis=1)  # (n_seeds, n_steps)
+
+    if args.save_dir is not None:
+        os.makedirs(args.save_dir, exist_ok=True)
+        # save config
+        with open(f'{args.save_dir}/config.pkl', 'wb') as f:
+            pickle.dump(config, f)
+        # save agent
+        if args.train == 'True':
+            with open(f'{args.save_dir}/agent.pkl', 'wb') as f:
+                pickle.dump(agent_params_trained, f)
+        # save rews
+        with open(f'{args.save_dir}/rews_init.pkl', 'wb') as f:
+            pickle.dump(rews_init, f)
+        with open(f'{args.save_dir}/rews_trained.pkl', 'wb') as f:
+            pickle.dump(rews_trained, f)
+
+        if args.train == 'True':
+            plt.figure(figsize=(10, 5))
+            plt.plot(jnp.mean(rets, axis=0), c=[.5, 0, 0, 1], label='mean')
+            plt.plot(rets.T, c=[.5, 0, 0, .1])
+            plt.title(f'Pretraining Env:\n{args.env}')
+            plt.ylabel('Single Episode Return')
+            plt.xlabel('Training Steps')
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(f'{args.save_dir}/plot_pretrain.png')
+            plt.close()
+
+        if args.load_dir is not None:
+            with open(f'{args.load_dir}/config.pkl', 'rb') as f:
+                env_pretrain = pickle.load(f)['ENV']
+        else:
+            env_pretrain = args.env
+
         plt.figure(figsize=(10, 5))
-        plt.subplot(121)
-        plt.plot(jnp.mean(rets, axis=0), c=[.5, 0, 0, 1], label='mean')
-        # plt.plot(jnp.median(rets, axis=0), c=[.5, 0, 0, .5], label='median')
-        plt.plot(rets.T, c=[.5, 0, 0, .1])
-        plt.title('SyntheticEnv (pretraining)')
-        plt.ylabel('Single Episode Return')
-        plt.xlabel('Training Time')
-        plt.legend()
-        plt.subplot(122)
-        plt.plot(jnp.mean(rews_start, axis=0), c=[.5, 0, 0, 1], label='mean start of training')
-        plt.plot(rews_start.T, c=[.5, 0, 0, .1])
-        plt.plot(jnp.mean(rews_end, axis=0), c=[0, .5, 0, 1], label='mean end of training')
-        plt.plot(rews_end.T, c=[0, .5, 0, .1])
-        plt.title('SyntheticEnv (pretraining)')
+        plt.plot(jnp.mean(rews_init, axis=0), c=[.5, 0, 0, 1], label='init')
+        plt.plot(rews_init.T, c=[.5, 0, 0, .1])
+        plt.plot(jnp.mean(rews_trained, axis=0), c=[0, .5, 0, 1], label=f'pretrained on {env_pretrain}')
+        plt.plot(rews_trained.T, c=[0, .5, 0, .1])
+        plt.title(f'Evaluation Env:\n{args.env}')
         plt.ylabel('Per-Timestep Reward')
         plt.xlabel('In-Context Timesteps')
         plt.legend()
-        plt.show()
-
-    if args.save_agent is not None:
-        os.makedirs(os.path.dirname(args.save_agent), exist_ok=True)
-        with open(args.save_agent, 'wb') as f:
-            pickle.dump(agent_params_trained, f)
+        plt.tight_layout()
+        plt.savefig(f'{args.save_dir}/plot_eval.png')
+        plt.close()
 
 
-def init_agent_params(rng, agent, n_seeds, n_steps, d_obs):
-    pass
+def get_init_agent_params(rng, agent, n_seeds, n_steps, d_obs):
+    init_obs, init_act, init_rew = jnp.zeros((n_steps, d_obs)), jnp.zeros((n_steps,), dtype=jnp.int32), jnp.zeros(
+        (n_steps,))
+    agent_params = jax.vmap(partial(agent.init, method=agent.forward_parallel),
+                            in_axes=(0, None, None, None))(split(rng, n_seeds), init_obs, init_act, init_rew)
+    return agent_params
 
 
 def callback_pbar(md, i_iter, traj_batch, pbar=None, n_envs=0, n_steps=0):
@@ -177,10 +224,10 @@ def train_agent(rng, config, env, agent, agent_params_init, n_seeds):
     callback = partial(callback_pbar, pbar=pbar, n_envs=config['NUM_ENVS'], n_steps=config['NUM_STEPS'])
 
     train_fn = make_train(config, env, agent, callback=callback, reset_env_iter=True, return_metric='rew_mean')
-    # train_fn = jax.jit(jax.vmap(train_fn))
+    train_fn = jax.jit(jax.vmap(train_fn))
     # devs = jax.devices()
     # devs = [devs[i % len(devs)] for i in range(n_seeds)]
-    train_fn = jax.pmap(train_fn)
+    # train_fn = jax.pmap(train_fn)
 
     mds = jnp.arange(n_seeds)
     rng, _rng = jax.random.split(rng)
@@ -195,7 +242,7 @@ def train_agent(rng, config, env, agent, agent_params_init, n_seeds):
 def eval_agent(rng, config, env, agent, agent_params_init, n_seeds):
     config = config.copy()
     config['LR'] = 0.
-    config['TOTAL_TIMESTEPS'] = 1e6
+    config['TOTAL_TIMESTEPS'] = 3e6
     config['UPDATE_EPOCHS'] = 0
     _, rews = train_agent(rng, config, env, agent, agent_params_init, n_seeds)
     return rews
