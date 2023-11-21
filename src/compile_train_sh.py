@@ -44,6 +44,7 @@ def main():
         "agent": "linear_transformer",
         "env": None,
         "save_dir": None,
+        "train": True,
         "n_envs": 64,
         "n_steps": 128,
         "total_timesteps": 100e6
@@ -62,6 +63,7 @@ def main():
         "env": None,
         "save_dir": None,
         "load_dir": None,
+        "train": False,
         "n_envs": 64,
         "n_steps": 128,
         "total_timesteps": 100e6
