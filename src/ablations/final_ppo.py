@@ -13,6 +13,7 @@ from einops import rearrange
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
 from jax.random import split
+from tqdm.auto import tqdm
 
 from wrappers import LogWrapper, FlattenObservationWrapper
 
@@ -66,7 +67,8 @@ def calc_gae(buffer, val_last, gamma=0.99, gae_lambda=0.95):
     return adv, ret
 
 
-def make_rollout_step_fn(agent, env, n_envs):
+def make_ppo_funcs(agent, env, n_envs, n_steps, n_updates, n_envs_batch, clip_eps, vf_coef, ent_coef, gamma=0.99,
+                   gae_lambda=0.95):
     def rollout_step(carry, _):
         rng, agent_params, env_params, agent_state, obs, env_state = carry
         # agent
@@ -84,10 +86,6 @@ def make_rollout_step_fn(agent, env, n_envs):
         trans = dict(obs=obs, act=act, rew=rew, done=done, info=info, logits=logits, log_prob=log_prob, val=val)
         return carry, trans
 
-    return rollout_step
-
-
-def make_update_batch_fn(agent, n_envs, n_envs_batch, clip_eps, vf_coef, ent_coef):
     def _loss_fn(agent_params, batch):
         forward_parallel = partial(agent.apply, method=agent.forward_parallel)
         logits, val = jax.vmap(forward_parallel, in_axes=(None, 0))(agent_params, batch['obs'])
@@ -127,14 +125,6 @@ def make_update_batch_fn(agent, n_envs, n_envs_batch, clip_eps, vf_coef, ent_coe
         carry = rng, train_state, buffer
         return carry, loss
 
-    return update_batch
-
-
-def make_ppo_step_fn(agent, env, n_envs, n_steps, n_updates, n_envs_batch, clip_eps, vf_coef, ent_coef, gamma=0.99,
-                     gae_lambda=0.95):
-    rollout_step = make_rollout_step_fn(agent, env, n_envs)
-    update_batch = make_update_batch_fn(agent, n_envs, n_envs_batch, clip_eps, vf_coef, ent_coef)
-
     def ppo_step(carry, _):
         rng, train_state, env_params, agent_state, obs, env_state = carry
         agent_params = train_state.params
@@ -153,45 +143,63 @@ def make_ppo_step_fn(agent, env, n_envs, n_steps, n_updates, n_envs_batch, clip_
         carry = rng, train_state, env_params, agent_state, obs, env_state
         return carry, buffer['info']['returned_episode_returns']
 
-    return ppo_step
+    def eval_step(carry, _):
+        rng, train_state, env_params, agent_state, obs, env_state = carry
+        agent_params = train_state.params
 
+        carry = rng, agent_params, env_params, agent_state, obs, env_state
+        carry, buffer = jax.lax.scan(rollout_step, carry, None, n_steps)
+        rng, agent_params, env_params, agent_state, obs, env_state = carry
 
-def make_train():
-    env, env_params = gymnax.make("CartPole-v1")
-    env = FlattenObservationWrapper(env)
-    env = LogWrapper(env)
-    agent = ActorCritic(env.action_space(env_params).n, activation="tanh")
-    n_envs = 4
+        carry = rng, train_state, env_params, agent_state, obs, env_state
+        return carry, buffer
 
-    def train(rng):
+    def init_agent_env(rng):
         env_params = env.default_params
         rng, _rng = split(rng)
         agent_state = jax.vmap(agent.get_init_state)(split(_rng, n_envs))
         rng, _rng = split(rng)
         obs, env_state = jax.vmap(env.reset, in_axes=(0, None))(split(rng, n_envs), env_params)
-        init_x = jnp.zeros(env.observation_space(env_params).shape)
-        network_params = agent.init(_rng, None, init_x, method=agent.forward_recurrent)
+
+        agent_state0, obs0 = jax.tree_map(lambda x: x[0], (agent_state, obs))
+        agent_params = agent.init(_rng, agent_state0, obs0, method=agent.forward_recurrent)
+
         tx = optax.chain(optax.clip_by_global_norm(0.5), optax.adam(2.5e-4, eps=1e-5))
-        train_state = TrainState.create(apply_fn=agent.apply, params=network_params, tx=tx, )
+        train_state = TrainState.create(apply_fn=agent.apply, params=agent_params, tx=tx, )
+        return rng, train_state, env_params, agent_state, obs, env_state
 
-        ppo_step = make_ppo_step_fn(agent, env, n_envs, 128, 16, 1, 0.2, 0.5, 0.01, gamma=0.99, gae_lambda=0.95)
-
-        carry = rng, train_state, env_params, agent_state, obs, env_state
-        carry, rews = jax.lax.scan(ppo_step, carry, None, 1000)
-        rng, train_state, env_params, agent_state, obs, env_state = carry
-        return rews
-
-    return train
+    return init_agent_env, ppo_step, eval_step
 
 
 def temp():
-    print('hello')
-    train = make_train()
-
+    print('here')
     rng = jax.random.PRNGKey(0)
-    rets = jax.vmap(train)(split(rng, 32))
+    env, env_params = gymnax.make("CartPole-v1")
+    env = FlattenObservationWrapper(env)
+    env = LogWrapper(env)
+    agent = ActorCritic(env.action_space(env_params).n, activation="tanh")
 
+    init_agent_env, ppo_step, eval_step = make_ppo_funcs(agent, env, 4, 128, 16, 1, 0.2, 0.5, 0.01, gamma=0.99,
+                                                         gae_lambda=0.95)
+
+    # def pipeline(rng):
+    #     carry = init_agent_env(rng)
+    #     carry, rets = jax.lax.scan(ppo_step, carry, None, 200)
+    #     return rets
+    #
+    # rets = jax.vmap(pipeline)(split(rng, 32))
+    # print(rets.shape)
+
+    ppo_step_jit_vmap = jax.jit(jax.vmap(ppo_step, in_axes=(0, None)))
+
+    carry = jax.vmap(init_agent_env)(split(rng, 32))
+    rets = []
+    for _ in tqdm(range(1000)):
+        carry, r = ppo_step_jit_vmap(carry, None)
+        rets.append(r)
+    rets = jnp.stack(rets, axis=1)
     print(rets.shape)
+
     steps = jnp.arange(rets.shape[1]) * 128 * 4
     plt.plot(steps, jnp.mean(rets, axis=(0, 2, 3)), label='mean')
     plt.plot(steps, jnp.median(rets, axis=(0, 2, 3)), label='median')
@@ -200,7 +208,6 @@ def temp():
     plt.ylabel('Return')
     plt.xlabel('Env Steps')
     plt.show()
-
     print('done')
 
 
