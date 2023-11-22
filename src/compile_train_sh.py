@@ -13,31 +13,39 @@ Transfer tasks:
 "env=acrobot;fobs=T;rpo=64;tl=128"
 """
 
-
-
 import experiment_utils
 
+
+def get_n_acts(env):
+    config = dict([sub.split('=') for sub in env.split(';')])
+    try:
+        return int(config["n_acts"])
+    except KeyError:
+        return dict(gridenv=4, cartpole=2, mountaincar=3, acrobot=3)[config["env"]]
+
+
 def main():
-    envs_pre = {}
+    envs_pre = []
+    for tl in [1, 4, 16, 64, 128]:
+        env = f"env=dsmdp;n_states=64;n_acts={4};d_obs=64;rdist=N;rpo=64;tl={tl}"
+        envs_pre.append(env)
+    envs_transfer = envs_pre
 
-    for n_acts in [2, 3, 4]:
-        for tl in [4, 128]:
-            denvu = f"env=dsmdp;n_states=64;n_acts={n_acts};d_obs=64;rdist=U;rpo=64;tl={tl}"
-            denvn = f"env=dsmdp;n_states=64;n_acts={n_acts};d_obs=64;rdist=N;rpo=64;tl={tl}"
-
-            cenv = f"env=csmdp;d_state=8;n_acts={n_acts};d_obs=64;delta=F;rpo=64;tl={tl}"
-            cenvd = f"env=csmdp;d_state=8;n_acts={n_acts};d_obs=64;delta=T;rpo=64;tl={tl}"
-            envs_pre[denvu] = n_acts
-            envs_pre[denvn] = n_acts
-            envs_pre[cenv] = n_acts
-            envs_pre[cenvd] = n_acts
-
-    envs_transfer = {
-        "env=gridenv;grid_len=8;fobs=T;rpo=64;tl=128": 4,
-        "env=cartpole;fobs=T;rpo=64;tl=128": 2,
-        "env=mountaincar;fobs=T;rpo=64;tl=128": 3,
-        "env=acrobot;fobs=T;rpo=64;tl=128": 3,
-    }
+    # envs_pre = []
+    # for n_acts in [2, 3, 4]:
+    #     for tl in [4, 128]:
+    #         denvu = f"env=dsmdp;n_states=64;n_acts={n_acts};d_obs=64;rdist=U;rpo=64;tl={tl}"
+    #         denvn = f"env=dsmdp;n_states=64;n_acts={n_acts};d_obs=64;rdist=N;rpo=64;tl={tl}"
+    #         cenv = f"env=csmdp;d_state=8;n_acts={n_acts};d_obs=64;delta=F;rpo=64;tl={tl}"
+    #         cenvd = f"env=csmdp;d_state=8;n_acts={n_acts};d_obs=64;delta=T;rpo=64;tl={tl}"
+    #         envs_pre.extend([denvu, denvn, cenv, cenvd])
+    #
+    # envs_transfer = [
+    #     "env=gridenv;grid_len=8;fobs=T;rpo=64;tl=128",
+    #     "env=cartpole;fobs=T;rpo=64;tl=128",
+    #     "env=mountaincar;fobs=T;rpo=64;tl=128",
+    #     "env=acrobot;fobs=T;rpo=64;tl=128",
+    # ]
 
     config = {
         "n_seeds": 8,
@@ -72,7 +80,7 @@ def main():
     configs = []
     for env_pre in envs_pre:
         for env_trans in envs_transfer:
-            if envs_pre[env_pre] != envs_transfer[env_trans]:
+            if get_n_acts(env_pre) != get_n_acts(env_trans):
                 continue
             c = config.copy()
             c["env"] = env_trans
@@ -85,8 +93,8 @@ def main():
     lines = [line for line in txt.split("\n") if line]
     out = []
     for i, line in enumerate(lines):
-        out.append(f'CUDA_VISIBLE_DEVICES={i%6} {line} &')
-        if i % 6 == 5:
+        out.append(f'CUDA_VISIBLE_DEVICES={i % 5} {line} &')
+        if i % 5 == 4:
             out.append("wait")
     out = "\n".join(out)
 
@@ -96,4 +104,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

@@ -28,7 +28,7 @@ class MountainCar(gymnax.environments.MountainCar):
     def step_env(self, rng, state, action, params):
         obs, state, rew, done, info = super().step_env(rng, state, action, params)
         rew = state.position
-        rew = (rew + .52686)/.07063
+        rew = (rew--.52686)/.07063
         done = jnp.zeros_like(done)
         return obs, state, rew, done, info
 

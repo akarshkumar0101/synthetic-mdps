@@ -1,7 +1,12 @@
+from functools import partial
+from typing import Tuple, Union, Optional
+
+import chex
 import jax
 import jax.numpy as jnp
-from gymnax import EnvParams
-from gymnax.environments import environment, spaces
+from gymnax.environments import environment
+from gymnax.environments.environment import EnvState, EnvParams
+
 from .wrappers import GymnaxWrapper
 
 """
@@ -101,3 +106,64 @@ class RewardTransform(GymnaxWrapper):
         obs, state, reward, done, info = self._env.step(key, state, action, params)
         reward = self.reward_transform(reward)
         return obs, state, reward, done, info
+
+
+class DictObsEnvironment(object):
+
+    def __init__(self, env):
+        super().__init__()
+        self.env = env
+        self.env.step = partial(self.step, self)
+
+    def __getattr__(self, name):
+        return getattr(self.env, name)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self,
+             key: chex.PRNGKey,
+             state: EnvState,
+             action: Union[int, float],
+             params: Optional[EnvParams] = None,
+             ) -> Tuple[chex.Array, EnvState, float, bool, dict]:
+        """Performs step transitions in the environment."""
+        # Use default env parameters if no others specified
+        if params is None:
+            params = self.default_params
+        key, key_reset = jax.random.split(key)
+        obs_st, state_st, reward, done, info = self.step_env(
+            key, state, action, params
+        )
+        obs_re, state_re = self.reset_env(key_reset, params)
+        # Auto-reset environment based on termination
+        state = jax.tree_map(
+            lambda x, y: jax.lax.select(done, x, y), state_re, state_st
+        )
+        obs = jax.tree_map(
+            lambda x, y: jax.lax.select(done, x, y), obs_re, obs_st
+        )
+        return obs, state, reward, done, info
+
+
+class DoneObsActRew(DictObsEnvironment):
+    def __init__(self, env):
+        super().__init__(env)
+        self._env = env
+
+    def __getattr__(self, name):
+        return getattr(self._env, name)
+
+    def reset_env(self, rng, params=None):
+        obs, state = self._env.reset_env(rng, params)
+        obs = dict(done=True, obs=obs, act_p=0, rew_p=0.)
+        return obs, state
+
+    def step_env(self, key, state, action, params=None):
+        obs, state, rew, done, info = self._env.step_env(key, state, action, params)
+        obs = dict(done=False, obs=obs, act_p=action, rew_p=rew)
+        return obs, state, rew, done, info
+
+    # def observation_space(self, params):
+    #     obs_space = self._env.observation_space(params)
+    #     act_space = self.action_space()
+    #     gymnax.environments.spaces.Dict()
+    #     return

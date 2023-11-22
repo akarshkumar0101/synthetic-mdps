@@ -1,56 +1,12 @@
 from functools import partial
-from typing import Sequence
 
 import distrax
-import flax.linen as nn
-import gymnax
 import jax
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
-import numpy as np
 import optax
 from einops import rearrange
-from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
 from jax.random import split
-from tqdm.auto import tqdm
-
-from wrappers import LogWrapper, FlattenObservationWrapper
-
-
-class ActorCritic(nn.Module):
-    n_acts: Sequence[int]
-    activation: str = "tanh"
-
-    def setup(self):
-        activation = nn.relu if self.activation == "relu" else nn.tanh
-        self.seq_pi = nn.Sequential([
-            nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)),
-            activation,
-            nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)),
-            activation,
-            nn.Dense(self.n_acts, kernel_init=orthogonal(0.01), bias_init=constant(0.0))
-        ])
-        self.seq_critic = nn.Sequential([
-            nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)),
-            activation,
-            nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)),
-            activation,
-            nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0)),
-        ])
-
-    def get_init_state(self, rng):
-        return None
-
-    def forward_recurrent(self, state, obs):  # shape: (...)
-        logits = self.seq_pi(obs)
-        val = self.seq_critic(obs)
-        return state, (logits, val[..., 0])
-
-    def forward_parallel(self, obs):  # shape: (n_steps, ...)
-        logits = self.seq_pi(obs)
-        val = self.seq_critic(obs)
-        return logits, val[..., 0]
 
 
 def calc_gae(buffer, val_last, gamma=0.99, gae_lambda=0.95):
@@ -131,6 +87,14 @@ def make_ppo_funcs(agent, env,
         rng, train_state, env_params, agent_state, obs, env_state = carry
         agent_params = train_state.params
 
+        # resetting every rollout
+        rng, _rng = split(rng)
+        env_params = jax.vmap(env.sample_params)(split(_rng, n_envs))
+        rng, _rng = split(rng)
+        agent_state = jax.vmap(agent.get_init_state)(split(_rng, n_envs))
+        rng, _rng = split(rng)
+        obs, env_state = jax.vmap(env.reset)(split(_rng, n_envs), env_params)
+
         carry = rng, agent_params, env_params, agent_state, obs, env_state
         carry, buffer = jax.lax.scan(rollout_step, carry, None, n_steps)
         rng, agent_params, env_params, agent_state, obs, env_state = carry
@@ -157,11 +121,12 @@ def make_ppo_funcs(agent, env,
         return carry, buffer
 
     def init_agent_env(rng):
-        env_params = env.default_params
+        rng, _rng = split(rng)
+        env_params = jax.vmap(env.sample_params)(split(_rng, n_envs))
         rng, _rng = split(rng)
         agent_state = jax.vmap(agent.get_init_state)(split(_rng, n_envs))
         rng, _rng = split(rng)
-        obs, env_state = jax.vmap(env.reset, in_axes=(0, None))(split(rng, n_envs), env_params)
+        obs, env_state = jax.vmap(env.reset)(split(_rng, n_envs), env_params)
 
         agent_state0, obs0 = jax.tree_map(lambda x: x[0], (agent_state, obs))
         agent_params = agent.init(_rng, agent_state0, obs0, method=agent.forward_recurrent)
@@ -171,66 +136,3 @@ def make_ppo_funcs(agent, env,
         return rng, train_state, env_params, agent_state, obs, env_state
 
     return init_agent_env, ppo_step, eval_step
-
-
-def temp():
-    print('here')
-    rng = jax.random.PRNGKey(0)
-    env, env_params = gymnax.make("CartPole-v1")
-    env = FlattenObservationWrapper(env)
-    env = LogWrapper(env)
-    agent = ActorCritic(env.action_space(env_params).n, activation="tanh")
-
-    init_agent_env, ppo_step, eval_step = make_ppo_funcs(agent, env)
-    init_agent_env = jax.vmap(init_agent_env)
-    ppo_step = jax.jit(jax.vmap(ppo_step, in_axes=(0, None)))
-    eval_step = jax.jit(jax.vmap(eval_step, in_axes=(0, None)))
-
-    # def pipeline(rng):
-    #     carry = init_agent_env(rng)
-    #     carry, rets = jax.lax.scan(ppo_step, carry, None, 1000)
-    #     return rets
-    #
-    # rets = jax.vmap(pipeline)(split(rng, 32))
-    # print(rets.shape)
-
-    carry = init_agent_env(split(rng, 32))
-    # rets = []
-    # for _ in tqdm(range(1000)):
-    #     carry, r = ppo_step(carry, None)
-    #     rets.append(r)
-    # rets = jnp.stack(rets, axis=1)
-    # print(rets.shape)
-
-    # steps = jnp.arange(rets.shape[1]) * 128 * 4
-    # plt.plot(steps, jnp.mean(rets, axis=(0, 2, 3)), label='mean')
-    # plt.plot(steps, jnp.median(rets, axis=(0, 2, 3)), label='median')
-    # plt.plot(steps, jnp.mean(rets, axis=(2, 3)).T, c='gray', alpha=0.1)
-    # plt.legend()
-    # plt.ylabel('Return')
-    # plt.xlabel('Env Steps')
-    # plt.show()
-    # print('done')
-
-    for _ in tqdm(range(1)):
-        carry, buffer = eval_step(carry, None)
-    env_state = buffer['env_state'].env_state
-    rew = buffer['rew']
-
-    print(jax.tree_map(lambda x: x.shape, env_state))
-    print(jax.tree_map(lambda x: x.shape, rew))
-    env_state = jax.tree_map(lambda x: rearrange(x[0], 't n -> (n t)'), env_state)
-    rew = jax.tree_map(lambda x: rearrange(x[0], 't n -> (n t)'), rew)
-    print(jax.tree_map(lambda x: x.shape, env_state))
-    print(jax.tree_map(lambda x: x.shape, rew))
-
-    env_state = [jax.tree_map(lambda x: x[i], env_state) for i in range(512)]
-
-    from gymnax.visualize import Visualizer
-    env, env_params = gymnax.make("CartPole-v1")
-    vis = Visualizer(env, env_params, env_state, rew)
-    vis.animate(f"anim.gif")
-
-
-if __name__ == "__main__":
-    temp()
