@@ -8,6 +8,12 @@ from einops import rearrange
 from flax.training.train_state import TrainState
 from jax.random import split
 
+"""
+PPO that assumes fixed episode lengths.
+Resets the environment and agent every rollout.
+Samples env_params = jax.vmap(env.sample_params)(split(_rng, n_envs)) every rollout.
+"""
+
 
 def calc_gae(buffer, val_last, gamma=0.99, gae_lambda=0.95):
     def calc_gae_step(carry, trans):
@@ -44,7 +50,7 @@ def make_ppo_funcs(agent, env,
                      env_state=env_state)
         return carry, trans
 
-    def _loss_fn(agent_params, batch):
+    def loss_fn(agent_params, batch):
         forward_parallel = partial(agent.apply, method=agent.forward_parallel)
         logits, val = jax.vmap(forward_parallel, in_axes=(None, 0))(agent_params, batch['obs'])
         pi = distrax.Categorical(logits=logits)
@@ -77,7 +83,7 @@ def make_ppo_funcs(agent, env,
         batch = jax.tree_util.tree_map(lambda x: x[:, idx_env], buffer)
         batch = jax.tree_util.tree_map(lambda x: rearrange(x, 't n ... -> n t ...'), batch)
 
-        grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
+        grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
         loss, grads = grad_fn(train_state.params, batch)
         train_state = train_state.apply_gradients(grads=grads)
         carry = rng, train_state, buffer
@@ -107,7 +113,7 @@ def make_ppo_funcs(agent, env,
         rng, train_state, buffer = carry
 
         carry = rng, train_state, env_params, agent_state, obs, env_state
-        return carry, buffer['info']['returned_episode_returns']
+        return carry, buffer
 
     def eval_step(carry, _):
         rng, train_state, env_params, agent_state, obs, env_state = carry

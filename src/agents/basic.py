@@ -26,20 +26,16 @@ class BasicAgent(nn.Module):
         ])
 
     def get_init_state(self, rng):
-        return jnp.zeros(())
+        return None
 
-    def forward_recurrent(self, state, oar):  # shape: (...)
-        obs, act_p, rew_p = oar
+    def forward_recurrent(self, state, obs):  # shape: (...)
         logits = self.seq_pi(obs)
         val = self.seq_critic(obs)
-        # pi = distrax.Categorical(logits=logits)
-        # return state, (pi, val[..., 0])
         return state, (logits, val[..., 0])
 
-    def forward_parallel(self, obs, act_p, rew_p):  # shape: (n_steps, ...)
+    def forward_parallel(self, obs):  # shape: (n_steps, ...)
         logits = self.seq_pi(obs)
         val = self.seq_critic(obs)
-        # pi = distrax.Categorical(logits=logits)
         return logits, val[..., 0]
 
 
@@ -50,15 +46,15 @@ class RandomAgent(nn.Module):
         pass
 
     def get_init_state(self, rng):
-        return jnp.zeros(())
+        return None
 
-    def forward_recurrent(self, state, oar):  # shape: (...)
+    def forward_recurrent(self, state, obs):  # shape: (...)
         logits = jnp.zeros((self.n_acts,))
         val = jnp.zeros((1,))
         return state, (logits, val[..., 0])
 
-    def forward_parallel(self, obs, act_p, rew_p):  # shape: (n_steps, ...)
-        n_steps = act_p.shape[0]
+    def forward_parallel(self, obs):  # shape: (n_steps, ...)
+        n_steps = obs['obs'].shape[0]
         logits = jnp.zeros((n_steps, self.n_acts,))
         val = jnp.zeros((n_steps, 1,))
         return logits, val[..., 0]

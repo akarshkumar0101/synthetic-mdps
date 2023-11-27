@@ -8,6 +8,10 @@ from einops import rearrange
 from flax.training.train_state import TrainState
 from jax.random import split
 
+"""
+PPO that can run on gymnax CartPole.
+"""
+
 
 def calc_gae(buffer, val_last, gamma=0.99, gae_lambda=0.95):
     def calc_gae_step(carry, trans):
@@ -17,7 +21,7 @@ def calc_gae(buffer, val_last, gamma=0.99, gae_lambda=0.95):
         gae = delta + gamma * gae_lambda * (1 - done) * gae
         return (gae, val), gae
 
-    carry = (jnp.zeros_like(val_last), val_last)
+    carry = jnp.zeros_like(val_last), val_last
     _, adv = jax.lax.scan(calc_gae_step, carry, buffer, reverse=True)
     ret = adv + buffer['val']
     return adv, ret
@@ -44,7 +48,7 @@ def make_ppo_funcs(agent, env,
                      env_state=env_state)
         return carry, trans
 
-    def _loss_fn(agent_params, batch):
+    def loss_fn(agent_params, batch):
         forward_parallel = partial(agent.apply, method=agent.forward_parallel)
         logits, val = jax.vmap(forward_parallel, in_axes=(None, 0))(agent_params, batch['obs'])
         pi = distrax.Categorical(logits=logits)
@@ -77,29 +81,11 @@ def make_ppo_funcs(agent, env,
         batch = jax.tree_util.tree_map(lambda x: x[:, idx_env], buffer)
         batch = jax.tree_util.tree_map(lambda x: rearrange(x, 't n ... -> n t ...'), batch)
 
-        grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
+        grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
         loss, grads = grad_fn(train_state.params, batch)
         train_state = train_state.apply_gradients(grads=grads)
         carry = rng, train_state, buffer
         return carry, loss
-
-    def ppo_step(carry, _):
-        rng, train_state, env_params, agent_state, obs, env_state = carry
-        agent_params = train_state.params
-
-        carry = rng, agent_params, env_params, agent_state, obs, env_state
-        carry, buffer = jax.lax.scan(rollout_step, carry, None, n_steps)
-        rng, agent_params, env_params, agent_state, obs, env_state = carry
-
-        val_last = buffer['val'][-1]
-        buffer['adv'], buffer['ret'] = calc_gae(buffer, val_last, gamma=gamma, gae_lambda=gae_lambda)
-
-        carry = rng, train_state, buffer
-        carry, losses = jax.lax.scan(update_batch, carry, None, n_updates)
-        rng, train_state, buffer = carry
-
-        carry = rng, train_state, env_params, agent_state, obs, env_state
-        return carry, buffer['info']['returned_episode_returns']
 
     def eval_step(carry, _):
         rng, train_state, env_params, agent_state, obs, env_state = carry
@@ -112,6 +98,20 @@ def make_ppo_funcs(agent, env,
         carry = rng, train_state, env_params, agent_state, obs, env_state
         return carry, buffer
 
+    def ppo_step(carry, _):
+        carry, buffer = eval_step(carry, None)
+        rng, train_state, env_params, agent_state, obs, env_state = carry
+
+        val_last = buffer['val'][-1]
+        buffer['adv'], buffer['ret'] = calc_gae(buffer, val_last, gamma=gamma, gae_lambda=gae_lambda)
+
+        carry = rng, train_state, buffer
+        carry, losses = jax.lax.scan(update_batch, carry, None, n_updates)
+        rng, train_state, buffer = carry
+
+        carry = rng, train_state, env_params, agent_state, obs, env_state
+        return carry, buffer
+
     def init_agent_env(rng):
         env_params = env.default_params
         rng, _rng = split(rng)
@@ -120,10 +120,11 @@ def make_ppo_funcs(agent, env,
         obs, env_state = jax.vmap(env.reset, in_axes=(0, None))(split(_rng, n_envs), env_params)
 
         agent_state0, obs0 = jax.tree_map(lambda x: x[0], (agent_state, obs))
+        rng, _rng = split(rng)
         agent_params = agent.init(_rng, agent_state0, obs0, method=agent.forward_recurrent)
 
         tx = optax.chain(optax.clip_by_global_norm(clip_grad_norm), optax.adam(lr, eps=1e-5))
         train_state = TrainState.create(apply_fn=agent.apply, params=agent_params, tx=tx)
         return rng, train_state, env_params, agent_state, obs, env_state
 
-    return init_agent_env, ppo_step, eval_step
+    return init_agent_env, eval_step, ppo_step
