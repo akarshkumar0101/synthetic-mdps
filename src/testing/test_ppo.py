@@ -10,7 +10,7 @@ from flax.linen.initializers import constant, orthogonal
 from jax.random import split
 from tqdm.auto import tqdm
 
-from src.algos.ppo.ppo import make_ppo_funcs
+from src.algos.ppo import make_ppo_funcs
 from wrappers import LogWrapper, FlattenObservationWrapper
 
 

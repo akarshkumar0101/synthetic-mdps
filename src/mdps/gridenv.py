@@ -42,7 +42,7 @@ class GridEnv(environment.Environment):
         rew = (rew - 0.12123) / 0.16537
 
         done = jnp.zeros((), dtype=jnp.bool_)
-        info = {}
+        info = {"base_env_state": state}
         return obs, state, rew, done, info
 
     def get_obs(self, state):

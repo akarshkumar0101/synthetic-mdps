@@ -12,7 +12,7 @@ from tqdm.auto import tqdm
 
 from agents.basic import BasicAgent, RandomAgent
 from agents.linear_transformer import LinearTransformerAgent
-from algos.ppo_fixed_episode import make_train
+from src.algos.old.ppo_fixed_episode import make_train
 from mdps.continuous_smdp import ContinuousInit, ContinuousMatrixTransition, ContinuousMatrixObs, ContinuousReward
 from mdps.discrete_smdp import DiscreteInit, DiscreteTransition, DiscreteObs, DiscreteReward
 from mdps.gridworld import GridEnv

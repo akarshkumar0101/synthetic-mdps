@@ -128,13 +128,14 @@ class LinearTransformerAgent(nn.Module):
                               bias_init=nn.initializers.constant(0.0))
         self.critic = nn.Dense(features=1)
 
-    def forward_parallel(self, obs, action, reward):
-        assert obs.shape[0] == self.n_steps
+    def forward_parallel(self, obs):
         time = jnp.arange(self.n_steps)
+        obs, act_p, rew_p = obs['obs'], obs['act_p'], obs['rew_p']
+        assert obs.shape[0] == self.n_steps
 
         x_obs = self.embed_obs(obs)  # T, D
-        x_action = self.embed_action(action)  # T, D
-        x_reward = self.embed_reward(reward[..., None])  # T, D
+        x_action = self.embed_action(act_p)  # T, D
+        x_reward = self.embed_reward(rew_p[..., None])  # T, D
         x_time = self.embed_time(time)  # T, D
         x = x_obs + x_action + x_reward + x_time
 
@@ -145,14 +146,14 @@ class LinearTransformerAgent(nn.Module):
         values = self.critic(x)  # T, 1
         return logits, values[..., 0]
 
-    def forward_recurrent(self, state, oar):
+    def forward_recurrent(self, state, obs):
         kTv, time = state['kTv'], state['time']
-        obs, action, reward = oar
+        obs, act_p, rew_p = obs['obs'], obs['act_p'], obs['rew_p']
         # assert time < self.n_steps
 
         x_obs = self.embed_obs(obs)  # D
-        x_action = self.embed_action(action)  # D
-        x_reward = self.embed_reward(reward[..., None])  # D
+        x_action = self.embed_action(act_p)  # D
+        x_reward = self.embed_reward(rew_p[..., None])  # D
         x_time = self.embed_time(time)  # D
         x = x_obs + x_action + x_reward + x_time
 

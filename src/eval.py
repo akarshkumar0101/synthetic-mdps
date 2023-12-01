@@ -2,23 +2,12 @@ import argparse
 import pickle
 from functools import partial
 
-import flax.linen as nn
-import gymnax
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
-import mdps.discrete_smdp
-from agents.basic import BasicAgent
-from agents.linear_transformer import LinearTransformerAgent
-from algos.ppo_general import make_train
-from mdps.continuous_smdp import ContinuousInit, ContinuousMatrixTransition, ContinuousMatrixObs, ContinuousReward
-from mdps.discrete_smdp import DiscreteInit, DiscreteTransition, DiscreteObs, DiscreteReward
-from mdps.gridworld import GridEnv
-from mdps.syntheticmdp import SyntheticMDP
-from mdps.wrappers import FlattenObservationWrapper, LogWrapper
-from mdps.wrappers_mine import TimeLimit
+from src.algos import make_train
 
 parser = argparse.ArgumentParser()
 # experiment args

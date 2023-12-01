@@ -15,6 +15,7 @@ class CartPole(gymnax.environments.CartPole):
         rew = -jnp.abs(state.theta)
         rew = (rew--4.19792)/3.77367
         done = jnp.zeros_like(done)
+        info["base_env_state"] = state
         return obs, state, rew, done, info
 
 
@@ -30,6 +31,7 @@ class MountainCar(gymnax.environments.MountainCar):
         rew = state.position
         rew = (rew--.52686)/.07063
         done = jnp.zeros_like(done)
+        info["base_env_state"] = state
         return obs, state, rew, done, info
 
 
@@ -45,4 +47,5 @@ class Acrobot(gymnax.environments.Acrobot):
         rew = -jnp.cos(state.joint_angle1)-jnp.cos(state.joint_angle2 + state.joint_angle1)
         rew = (rew--1.91526)/.11145
         done = jnp.zeros_like(done)
+        info["base_env_state"] = state
         return obs, state, rew, done, info
