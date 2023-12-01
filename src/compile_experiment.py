@@ -27,7 +27,7 @@ def get_n_acts(env):
 def main():
     envs_pre = []
     for tl in [1, 128]:
-        env = f"env=dsmdp;n_states=64;n_acts={4};d_obs=64;rdist=N;rpo=64;tl={tl}"
+        env = f"name=dsmdp;n_states=64;n_acts={4};d_obs=64;rdist=N;rpo=64;tl={tl}"
         envs_pre.append(env)
     envs_transfer = envs_pre
 
@@ -46,9 +46,11 @@ def main():
     #     "env=mountaincar;fobs=T;rpo=64;tl=128",
     #     "env=acrobot;fobs=T;rpo=64;tl=128",
     # ]
-
-    config_train = dict(n_seeds=8, env_id=None, agent="linear_transformer", run="train", load_dir=None, save_dir=None, n_iters=1000)
-    config_eval = dict(n_seeds=8, env_id=None, agent="linear_transformer", run="eval", load_dir=None, save_dir=None, n_iters=10)
+    config_default = dict(n_seeds=0, env_id=None, agent=None, run=None, load_dir=None, save_dir=None, n_iters=None)
+    config_train = dict(n_seeds=8, env_id=None, agent="linear_transformer", run="train", load_dir=None, save_dir=None,
+                        n_iters=1000)
+    config_eval = dict(n_seeds=8, env_id=None, agent="linear_transformer", run="eval", load_dir=None, save_dir=None,
+                       n_iters=10)
 
     configs = []
     for env_pre in envs_pre:
@@ -56,7 +58,7 @@ def main():
         c["env_id"] = env_pre
         c["save_dir"] = f"../data/{env_pre}"
         configs.append(c)
-    txt_pre = experiment_utils.create_command_txt_from_configs(configs, python_command='python run.py')
+    txt_pre = experiment_utils.create_command_txt_from_configs(configs, config_default, python_command='python run.py')
 
     configs = []
     for env_pre in envs_pre:
@@ -68,22 +70,25 @@ def main():
             c["save_dir"] = f"../data/transfer/{env_trans}/{env_pre}"
             c["load_dir"] = f"../data/{env_pre}"
             configs.append(c)
-    txt_trans = experiment_utils.create_command_txt_from_configs(configs, python_command='python run.py')
+    txt_trans = experiment_utils.create_command_txt_from_configs(configs, config_default, python_command='python run.py')
 
     def change_to_n_gpus(txt, n_gpus):
         lines = [line for line in txt.split("\n") if line]
         out = []
         for i, line in enumerate(lines):
             out.append(f'CUDA_VISIBLE_DEVICES={i % n_gpus} {line} &')
-            if i % n_gpus == n_gpus-1:
+            if i % n_gpus == n_gpus - 1 or i == len(lines) - 1:
                 out.append("wait")
-        out.append("wait")
         out = "\n".join(out)
         return out
 
     txt_pre = change_to_n_gpus(txt_pre, 4)
     txt_trans = change_to_n_gpus(txt_trans, 4)
-    txt = txt_pre + "\n"*5 + txt_trans
+    txt = txt_pre + "\n" * 5 + txt_trans
+
+    txt = "\n".join(["#!/bin/bash",
+                     "source /data/vision/phillipi/akumar01/.virtualenvs/synthetic-mdps/bin/activate",
+                     "cd /data/vision/phillipi/akumar01/synthetic-mdps/src", "\n" * 3]) + txt
 
     with open("experiment.sh", "w") as f:
         f.write(txt)

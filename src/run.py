@@ -125,10 +125,11 @@ def run(args):
 
     rng, _rng = split(rng)
     carry = init_agent_env(split(_rng, args.n_seeds))
-    if args.load_dir is not None:
+    if args.load_dir:
         rng, train_state, env_params, agent_state, obs, env_state = carry
-        with open(f'{args.load_dir}/train_state.pkl', 'rb') as f:
-            train_state = pickle.load(f)
+        with open(f'{args.load_dir}/agent_params.pkl', 'rb') as f:
+            agent_params = pickle.load(f)
+        train_state = train_state.replace(params=agent_params)
         carry = rng, train_state, env_params, agent_state, obs, env_state
     step_fn = ppo_step if args.run == 'train' else eval_step
     buffers, rew = [], []
@@ -149,8 +150,8 @@ def run(args):
         with open(f'{args.save_dir}/rew.pkl', 'wb') as f:
             pickle.dump(rew, f)
         if args.run == 'train':
-            with open(f'{args.save_dir}/train_state.pkl', 'wb') as f:
-                pickle.dump(train_state, f)
+            with open(f'{args.save_dir}/agent_params.pkl', 'wb') as f:
+                pickle.dump(train_state.params, f)
         elif args.run == 'eval':
             with open(f'{args.save_dir}/buffers.pkl', 'wb') as f:
                 pickle.dump(buffers, f)
