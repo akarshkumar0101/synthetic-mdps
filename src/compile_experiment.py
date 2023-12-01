@@ -81,8 +81,8 @@ def main():
         out = "\n".join(out)
         return out
 
-    txt_pre = change_to_n_gpus(txt_pre, 6)
-    txt_trans = change_to_n_gpus(txt_trans, 6)
+    txt_pre = change_to_n_gpus(txt_pre, 4)
+    txt_trans = change_to_n_gpus(txt_trans, 4)
     txt = txt_pre + "\n"*5 + txt_trans
 
     with open("experiment.sh", "w") as f:
