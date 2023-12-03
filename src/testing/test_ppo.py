@@ -62,19 +62,53 @@ def main():
     eval_step = jax.jit(jax.vmap(eval_step, in_axes=(0, None)))
     ppo_step = jax.jit(jax.vmap(ppo_step, in_axes=(0, None)))
 
-    # def pipeline(rng):
-    #     carry = init_agent_env(rng)
-    #     carry, rets = jax.lax.scan(ppo_step, carry, None, 1000)
-    #     return rets
-    #
-    # rets = jax.vmap(pipeline)(split(rng, 32))
-    # print(rets.shape)
-
     carry = init_agent_env(split(rng, 32))
     rets = []
-    for _ in tqdm(range(1000)):
+    pbar = tqdm(range(1000))
+    for _ in pbar:
         carry, buffer = ppo_step(carry, None)
         rets.append(buffer['info']['returned_episode_returns'])
+        pbar.set_postfix(ret=rets[-1].mean())
+    rets = jnp.stack(rets, axis=1)
+    print(rets.shape)
+
+    steps = jnp.arange(rets.shape[1]) * 128 * 4
+    plt.plot(steps, jnp.mean(rets, axis=(0, 2, 3)), label='mean')
+    plt.plot(steps, jnp.median(rets, axis=(0, 2, 3)), label='median')
+    plt.plot(steps, jnp.mean(rets, axis=(2, 3)).T, c='gray', alpha=0.1)
+    plt.legend()
+    plt.ylabel('Return')
+    plt.xlabel('Env Steps')
+    plt.show()
+    print('done')
+
+
+def main_lin():
+    print('starting')
+
+    from src.mdps.wrappers_mine import DoneObsActRew
+    from src.agents.linear_transformer import LinearTransformerAgent
+
+    rng = jax.random.PRNGKey(0)
+    env, env_params = gymnax.make("CartPole-v1")
+    env = FlattenObservationWrapper(env)
+    env = DoneObsActRew(env)
+    env = LogWrapper(env)
+    agent = LinearTransformerAgent(env.action_space(env_params).n, 128, 1, 4, 64)
+
+    # TODO: linear transformer requires ppo_step to reset agent_state every rollout...
+    init_agent_env, eval_step, ppo_step = make_ppo_funcs(agent, env)
+    init_agent_env = jax.vmap(init_agent_env)
+    eval_step = jax.jit(jax.vmap(eval_step, in_axes=(0, None)))
+    ppo_step = jax.jit(jax.vmap(ppo_step, in_axes=(0, None)))
+
+    carry = init_agent_env(split(rng, 4))
+    rets = []
+    pbar = tqdm(range(1000))
+    for _ in pbar:
+        carry, buffer = ppo_step(carry, None)
+        rets.append(buffer['info']['returned_episode_returns'])
+        pbar.set_postfix(ret=rets[-1].mean())
     rets = jnp.stack(rets, axis=1)
     print(rets.shape)
 

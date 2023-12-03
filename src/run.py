@@ -19,10 +19,13 @@ from mdps.natural_mdps import CartPole, MountainCar, Acrobot
 from mdps.syntheticmdp import SyntheticMDP
 from mdps.wrappers_mine import TimeLimit, RandomlyProjectObservation, DoneObsActRew, FlattenObservationWrapper
 
+from jax import config
+config.update("jax_debug_nans", True)
+
 parser = argparse.ArgumentParser()
 # experiment args
 parser.add_argument("--n_seeds", type=int, default=1)
-parser.add_argument("--env_id", type=str, default="name=gridenv;grid_len=8;fobs=T;rpo=64;tl=128")
+parser.add_argument("--env_id", type=str, default=None)
 parser.add_argument("--agent_id", type=str, default="linear_transformer")
 
 parser.add_argument("--run", type=str, default='train')
@@ -58,8 +61,8 @@ def create_env(env_id):
     elif env_cfg['name'] == "acrobot":
         env = Acrobot()
     elif env_cfg['name'] == 'gridenv':
-        grid_len = int(env_cfg['grid_len'])
-        env = GridEnv(grid_len, start_state='random')
+        grid_len, pos_start, pos_rew = int(env_cfg['grid_len']), env_cfg['pos_start'], env_cfg['pos_rew']
+        env = GridEnv(grid_len, pos_start=pos_start, pos_rew=pos_rew)
     elif env_cfg['name'] == 'dsmdp':
         n_states, d_obs, n_acts = int(env_cfg['n_states']), int(env_cfg['d_obs']), int(env_cfg['n_acts'])
         if env_cfg['rdist'] == 'U':
@@ -133,11 +136,13 @@ def run(args):
         carry = rng, train_state, env_params, agent_state, obs, env_state
     step_fn = ppo_step if args.run == 'train' else eval_step
     buffers, rew = [], []
-    for _ in tqdm(range(args.n_iters)):
+    pbar = tqdm(range(args.n_iters))
+    for _ in pbar:
         carry, buffer = step_fn(carry, None)
         rew.append(buffer['rew'])
         if args.run == 'eval':
             buffers.append(buffer)
+        pbar.set_postfix(rew=buffer['rew'].mean())
     rng, train_state, env_params, agent_state, obs, env_state = carry
     rew = jnp.stack(rew, axis=1)  # n_seeds, n_iters, n_steps, n_envs
 

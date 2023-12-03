@@ -21,14 +21,15 @@ def get_n_acts(env):
     try:
         return int(config["n_acts"])
     except KeyError:
-        return dict(gridenv=4, cartpole=2, mountaincar=3, acrobot=3)[config["env"]]
+        return dict(gridenv=5, cartpole=2, mountaincar=3, acrobot=3)[config["name"]]
 
 
 def main():
     envs_pre = []
-    for tl in [1, 128]:
-        env = f"name=dsmdp;n_states=64;n_acts={4};d_obs=64;rdist=N;rpo=64;tl={tl}"
-        envs_pre.append(env)
+    # for tl in [1, 128]:
+    #     env = f"name=dsmdp;n_states=64;n_acts={4};d_obs=64;rdist=N;rpo=64;tl={tl}"
+    #     envs_pre.append(env)
+    envs_pre = ["name=gridenv;grid_len=8;fobs=T;rpo=64;tl=128"]
     envs_transfer = envs_pre
 
     # envs_pre = []

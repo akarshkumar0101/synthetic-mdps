@@ -4,23 +4,26 @@ from gymnax.environments import environment, spaces
 
 
 class GridEnv(environment.Environment):
-    def __init__(self, grid_len, start_state='random'):
+    def __init__(self, grid_len, pos_start='random', pos_rew='random'):
         super().__init__()
         self.grid_len = grid_len
         self.obs_shape = (grid_len, grid_len)
-        self.start_state = start_state
+        self.pos_start, self.pos_rew = pos_start, pos_rew
         self.obs = jnp.zeros((grid_len, grid_len), dtype=jnp.float32)
-        self.action_map = jnp.array([[0, 1], [0, -1], [1, 0], [-1, 0]])
+        self.action_map = jnp.array([[0, 0], [0, 1], [0, -1], [1, 0], [-1, 0]])
         self.n_acts = len(self.action_map)
 
     def sample_params(self, rng):
-        if self.start_state == 'random':
+        if self.pos_start == 'random':
             rng, _rng = jax.random.split(rng)
             pos_start = jax.random.randint(_rng, (2,), 0, self.grid_len)
         else:
             pos_start = jnp.zeros((2,), dtype=jnp.int32)
-        rng, _rng = jax.random.split(rng)
-        pos_rew = jax.random.randint(_rng, (2,), 0, self.grid_len)
+        if self.pos_rew == 'random':
+            rng, _rng = jax.random.split(rng)
+            pos_rew = jax.random.randint(_rng, (2,), 0, self.grid_len)
+        else:
+            pos_rew = jnp.full((2,), self.grid_len-1, dtype=jnp.int32)
         params = dict(pos_start=pos_start, pos_rew=pos_rew)
         return params
 
@@ -38,11 +41,11 @@ class GridEnv(environment.Environment):
         """Performs step transitions in the environment."""
         state = jnp.clip(state + self.action_map[action], 0, self.grid_len - 1)
         obs = self.get_obs(state)
-        rew = self.get_rew(state, params)
-        rew = (rew - 0.12123) / 0.16537
+        rew, dist = self.get_rew(state, params)
+        # rew = (rew - 0.12123) / 0.16537
 
         done = jnp.zeros((), dtype=jnp.bool_)
-        info = {"base_env_state": state}
+        info = {"base_env_state": state, "pos_rew": params['pos_rew'], "goal_dist": dist}
         return obs, state, rew, done, info
 
     def get_obs(self, state):
@@ -53,8 +56,8 @@ class GridEnv(environment.Environment):
     def get_rew(self, state, params):
         a, b = state, params['pos_rew']
         d = jnp.linalg.norm(a-b, axis=-1)
-        return 1 / (d ** 2 + 1)
-    # 1/(d**2+1)
+        # return 1 / (d ** 2 + 1), d
+        return -d, d
 
     @property
     def name(self) -> str:
