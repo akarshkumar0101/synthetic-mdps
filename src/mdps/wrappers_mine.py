@@ -219,3 +219,67 @@ class DoneObsActRew(MyGymnaxWrapper):
         act_space = self._env.action_space(params)
         rew_space = gymnax.environments.spaces.Box(-1, 1, ())
         return gymnax.environments.spaces.Dict(dict(done=done_space, obs=obs_space, act_p=act_space, rew_p=rew_space))
+
+
+class MetaRLWrapper(MyGymnaxWrapper):
+    def __init__(self, env, n_steps_trial, n_trials, done_on_trial_end=False):
+        super().__init__(env)
+        self.n_steps_trial = n_steps_trial
+        self.n_trials = n_trials
+        self.done_on_trial_end = done_on_trial_end
+        # TODO: done_on_trial_end=True doesn't actually make sense...
+
+    def reset_env(self, key, params=None):
+        obs, _state = self._env.reset_env(key, params)
+        state = dict(_state=_state, time=0)
+        return obs, state
+
+    def step_env(self, key, state, action, params=None):
+        _state, time = state['_state'], state['time']
+
+        obs, _state, rew, done, info = self._env.step_env(key, _state, action, params)
+        obs_re, _state_re = self._env.reset_env(key, _state)
+        obs, _state = jax.tree_map(
+            lambda x, y: jax.lax.select((time+1) % self.n_steps_trial == 0, x, y), (obs_re, _state_re), (obs, _state)
+        )
+        state = dict(_state=_state, time=time + 1)
+
+        info['done_trial'] = (time + 1) % self.n_steps_trial == 0
+        # if self.done_on_trial_end:
+        #     done = state['time'] % self.n_steps_trial == 0
+        # else:
+        #     done = state['time'] >= (self.n_steps_trial * self.n_trials)
+        return obs, state, rew, done, info
+
+
+def step_random_agent(env, rng, n_envs, n_steps):
+    rng, _rng = split(rng)
+    env_params = jax.vmap(env.sample_params)(split(_rng, n_envs))
+    rng, _rng = split(rng)
+    obs, state = jax.vmap(env.reset)(split(_rng, n_envs), env_params)
+    rews = []
+    for t in range(n_steps):
+        rng, _rng = split(rng)
+        act = jax.random.randint(_rng, (n_envs,), 0, env.n_acts)
+        rng, _rng = split(rng)
+        obs, state, rew, done, info = jax.vmap(env.step)(split(_rng, n_envs), state, act, env_params)
+        rews.append(rew)
+    rews = jnp.stack(rews, axis=1)
+    return rews
+
+
+class GaussianReward(MyGymnaxWrapper):
+    def __init__(self, env, n_envs, n_steps):
+        super().__init__(env)
+        rews = step_random_agent(env, jax.random.PRNGKey(0), n_envs, n_steps)
+        self.mean = rews.mean()
+        self.std = rews.std()
+        print(self.mean, self.std)
+
+    def reset_env(self, rng, params=None):
+        return self._env.reset_env(rng, params)
+
+    def step_env(self, rng, state, action, params=None):
+        obs, state, rew, done, info = self._env.step_env(rng, state, action, params)
+        rew = (rew - self.mean) / self.std
+        return obs, state, rew, done, info

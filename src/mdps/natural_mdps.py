@@ -1,6 +1,5 @@
 import jax.numpy as jnp
 import gymnax
-from gridenv import GridEnv
 
 
 class CartPole(gymnax.environments.CartPole):
@@ -64,44 +63,23 @@ class Acrobot(gymnax.environments.Acrobot):
         return obs, state, rew, done, info
 
 
-def wtf(env, rng, n_envs, n_steps):
-    rng, _rng = split(rng)
-    env_params = jax.vmap(env.sample_params)(split(_rng, n_envs))
 
-    rng, _rng = split(rng)
-    obs, state = jax.vmap(env.reset)(split(_rng, n_envs), env_params)
-
-    rews = []
-    for t in range(n_steps):
-        rng, _rng = split(rng)
-        act = jax.random.randint(_rng, (n_envs,), 0, env.n_acts)
-        rng, _rng = split(rng)
-        obs, state, rew, done, info = jax.vmap(env.step)(split(_rng, n_envs), state, act, env_params)
-        rews.append(rew)
-    rews = jnp.stack(rews, axis=1)
-    return rews
 
 if __name__ == "__main__":
     import jax
+    import numpy as np
     from jax.random import split
     import matplotlib.pyplot as plt
+    from src.mdps.wrappers_mine import step_random_agent, GaussianReward
 
     rng = jax.random.PRNGKey(0)
-    env = GridEnv(grid_len=8)
+    # env = GridEnv(grid_len=8)
+    env = Acrobot()
 
-    rews = 
+    rews = step_random_agent(env, rng, 1024, 128)
+    print(rews.mean(), rews.std())
 
+    env = GaussianReward(env, 1024, 128)
 
-    # rng = jax.random.PRNGKey(0)
-    # rng, _rng = split(rng)
-    # a = jax.random.randint(_rng, (100000, 2), 0, 8)
-    # rng, _rng = split(rng)
-    # b = jax.random.randint(_rng, (100000, 2), 0, 8)
-    # d = (a-b)
-    # print(jnp.linalg.norm(d, axis=-1).mean())
-    # print(jnp.sqrt((d**2).sum(axis=-1)).mean())
-
-
-
-    plt.plot(rews.mean(axis=0))
-    plt.show()
+    rews = step_random_agent(env, rng, 1024, 128)
+    print(rews.mean(), rews.std())
