@@ -222,12 +222,10 @@ class DoneObsActRew(MyGymnaxWrapper):
 
 
 class MetaRLWrapper(MyGymnaxWrapper):
-    def __init__(self, env, n_steps_trial, n_trials, done_on_trial_end=False):
+    def __init__(self, env, n_steps_trial, n_trials):
         super().__init__(env)
         self.n_steps_trial = n_steps_trial
         self.n_trials = n_trials
-        self.done_on_trial_end = done_on_trial_end
-        # TODO: done_on_trial_end=True doesn't actually make sense...
 
     def reset_env(self, key, params=None):
         obs, _state = self._env.reset_env(key, params)
@@ -245,10 +243,6 @@ class MetaRLWrapper(MyGymnaxWrapper):
         state = dict(_state=_state, time=time + 1)
 
         info['done_trial'] = (time + 1) % self.n_steps_trial == 0
-        # if self.done_on_trial_end:
-        #     done = state['time'] % self.n_steps_trial == 0
-        # else:
-        #     done = state['time'] >= (self.n_steps_trial * self.n_trials)
         return obs, state, rew, done, info
 
 
