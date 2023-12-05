@@ -147,7 +147,7 @@ def some_experiment():
         f.write(txt)
 
 
-def experiment_mrl_horizon():
+def experiment_mrl_horizon(dir_exp, n_gpus):
     envs_train = [
         f"name=dsmdp;n_states=64;n_acts={4};d_obs=16;rpo=16;mrl=1x128",
         f"name=dsmdp;n_states=64;n_acts={4};d_obs=16;rpo=16;mrl=8x16",
@@ -158,7 +158,7 @@ def experiment_mrl_horizon():
 
     config_default = dict(n_seeds=0, env_id=None, agent=None, run=None, load_dir=None, save_dir=None, n_iters=None)
     config_train = dict(n_seeds=8, env_id=None, agent="linear_transformer", run="train", load_dir=None, save_dir=None,
-                        n_iters=3000, n_envs=128, n_envs_batch=32, lr=1e-4)
+                        n_iters=5000, n_envs=128, n_envs_batch=32, lr=1e-4)
     config_eval = dict(n_seeds=8, env_id=None, agent="linear_transformer", run="eval", load_dir=None, save_dir=None,
                        n_iters=10, n_envs=128, n_envs_batch=32, lr=1e-4)
 
@@ -178,21 +178,19 @@ def experiment_mrl_horizon():
                 continue
             c = config_eval.copy()
             c["env_id"] = env_eval
-            c["load_dir"] = f"../data/train/{env_train}" if env_train is not None else None
-            c["save_dir"] = f"../data/eval/{env_eval}/{env_train}"
+            c["load_dir"] = f"{dir_exp}/train/{env_train}" if env_train is not None else None
+            c["save_dir"] = f"{dir_exp}/eval/{env_eval}/{env_train}"
             configs.append(c)
     txt_eval = experiment_utils.create_command_txt_from_configs(configs, config_default, python_command='python run.py')
 
-    txt_train = change_to_n_gpus(txt_train, 4)
-    txt_eval = change_to_n_gpus(txt_eval, 4)
+    txt_train = change_to_n_gpus(txt_train, n_gpus)
+    txt_eval = change_to_n_gpus(txt_eval, n_gpus)
 
     txt = "\n".join([txt_header, txt_train, txt_eval])
-
-    with open("experiment.sh", "w") as f:
-        f.write(txt)
+    return txt
 
 
-def experiment_transfer():
+def experiment_transfer(dir_exp, n_gpus):
     envs_train = [
         "name=gridenv;grid_len=8;pos_start=random;pos_rew=random;fobs=T;rpo=16;mrl=4x32",
         "name=cartpole;fobs=T;rpo=16;mrl=4x32",
@@ -228,19 +226,22 @@ def experiment_transfer():
                 continue
             c = config_eval.copy()
             c["env_id"] = env_eval
-            c["load_dir"] = f"../data/train/{env_train}" if env_train is not None else None
-            c["save_dir"] = f"../data/eval/{env_eval}/{env_train}"
+            c["load_dir"] = f"{dir_exp}/train/{env_train}" if env_train is not None else None
+            c["save_dir"] = f"{dir_exp}/eval/{env_eval}/{env_train}"
             configs.append(c)
     txt_eval = experiment_utils.create_command_txt_from_configs(configs, config_default, python_command='python run.py')
 
-    txt_train = change_to_n_gpus(txt_train, 4)
-    txt_eval = change_to_n_gpus(txt_eval, 4)
+    txt_train = change_to_n_gpus(txt_train, n_gpus)
+    txt_eval = change_to_n_gpus(txt_eval, n_gpus)
 
     txt = "\n".join([txt_header, txt_train, txt_eval])
-
-    with open("experiment.sh", "w") as f:
-        f.write(txt)
+    return txt
 
 
 if __name__ == '__main__':
-    experiment_transfer()
+    with open("experiment_mrl_horizon.sh", "w") as f:
+        f.write(experiment_mrl_horizon("../data/mrl_horizon/", 4))
+    with open("experiment_transfer.sh", "w") as f:
+        f.write(experiment_transfer("../data/transfer/", 4))
+
+
