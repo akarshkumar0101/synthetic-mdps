@@ -18,15 +18,15 @@ from mdps.discrete_smdp import DiscreteInit, DiscreteTransition, DiscreteObs, Di
 from mdps.gridenv import GridEnv
 from mdps.natural_mdps import CartPole, MountainCar, Acrobot
 from mdps.syntheticmdp import SyntheticMDP
-from mdps.wrappers_mine import TimeLimit, RandomlyProjectObservation, DoneObsActRew, FlattenObservationWrapper, \
-    GaussianReward, MetaRLWrapper
+from mdps.wrappers_mine import RandomlyProjectObservation, DoneObsActRew, FlattenObservationWrapper, \
+    GaussianReward, MetaRLWrapper, step_random_agent
 
 config.update("jax_debug_nans", True)
 
 parser = argparse.ArgumentParser()
 # experiment args
 parser.add_argument("--n_seeds", type=int, default=1)
-parser.add_argument("--env_id", type=str, default="name=cartpole;tl=128")
+parser.add_argument("--env_id", type=str, default="name=cartpole;mrl=1x128")
 parser.add_argument("--agent_id", type=str, default="linear_transformer")
 
 parser.add_argument("--run", type=str, default='train')
@@ -49,7 +49,7 @@ parser.add_argument("--gamma", type=float, default=0.99)
 parser.add_argument("--gae_lambda", type=float, default=0.95)
 
 
-def create_env(env_id):
+def create_env(env_id, n_steps):
     """
     Pretraining Tasks:
     "name=dsmdp;n_states=64;n_acts=4;d_obs=64;rpo=64;tl=4"
@@ -69,17 +69,13 @@ def create_env(env_id):
 
     if env_cfg['name'] == "cartpole":
         env = CartPole()
-        env = GaussianReward(env, n_envs=1024, n_steps=128)
     elif env_cfg['name'] == "mountaincar":
         env = MountainCar()
-        env = GaussianReward(env, n_envs=1024, n_steps=128)
     elif env_cfg['name'] == "acrobot":
         env = Acrobot()
-        env = GaussianReward(env, n_envs=1024, n_steps=128)
     elif env_cfg['name'] == 'gridenv':
         grid_len, pos_start, pos_rew = int(env_cfg['grid_len']), env_cfg['pos_start'], env_cfg['pos_rew']
         env = GridEnv(grid_len, pos_start=pos_start, pos_rew=pos_rew)
-        env = GaussianReward(env, n_envs=1024, n_steps=128)
     elif env_cfg['name'] == 'dsmdp':
         n_states, d_obs, n_acts = int(env_cfg['n_states']), int(env_cfg['d_obs']), int(env_cfg['n_acts'])
         rdist = nn.initializers.normal(stddev=1.)
@@ -90,7 +86,7 @@ def create_env(env_id):
         #     rdist = nn.initializers.normal(stddev=1.)
         # elif config['rdist'] == 'U.24':
         #     rdist = nn.initializers.uniform(scale=.24)
-        model_init = DiscreteInit(n_states)
+        model_init = DiscreteInit(n_states, initializer=nn.initializers.normal(stddev=100))
         model_trans = DiscreteTransition(n_states, initializer=nn.initializers.normal(stddev=100))
         model_obs = DiscreteObs(n_states, d_obs)
         model_rew = DiscreteReward(n_states, initializer=rdist)
@@ -108,7 +104,13 @@ def create_env(env_id):
 
     # if 'tl' in env_cfg and env_cfg['tl'].isdigit():
     #     env = TimeLimit(env, n_steps=int(env_cfg['tl']))
-    env = MetaRLWrapper(env, n_steps_trial=16, n_trials=8)
+
+    assert "mrl" in env_cfg
+    n_trials, n_steps_trial = [int(x) for x in env_cfg['mrl'].split('x')]
+    assert n_trials * n_steps_trial == n_steps
+    env = MetaRLWrapper(env, n_trials=n_trials, n_steps_trial=n_steps_trial)
+    env = GaussianReward(env, n_envs=8192, n_steps=n_steps)
+
     if 'fobs' in env_cfg and env_cfg['fobs'] == 'T':
         env = FlattenObservationWrapper(env)
     if 'rpo' in env_cfg and env_cfg['rpo'].isdigit():
@@ -124,7 +126,7 @@ def create_agent(env, agent_name, n_steps):
         agent = BasicAgent(env.action_space(None).n)
     elif agent_name == 'linear_transformer':
         agent = LinearTransformerAgent(n_acts=env.action_space(None).n,
-                                       n_steps=n_steps, n_layers=1, n_heads=4, d_embd=128)
+                                       n_steps=n_steps, n_layers=2, n_heads=4, d_embd=128)
     else:
         raise NotImplementedError
     return agent
@@ -132,13 +134,15 @@ def create_agent(env, agent_name, n_steps):
 
 def run(args):
     print(args)
+    if args.load_dir == "None":
+        args.load_dir = None
     assert args.run in ['train', 'eval']
     config = vars(args)
 
     rng = jax.random.PRNGKey(0)
 
-    env = create_env(args.env_id)
-    agent = create_agent(env, args.agent_id, 128)
+    env = create_env(args.env_id, args.n_steps)
+    agent = create_agent(env, args.agent_id, args.n_steps)
 
     init_agent_env, eval_step, ppo_step = make_ppo_funcs(
         agent, env, args.n_envs, args.n_steps, args.n_updates, args.n_envs_batch, args.lr, args.clip_grad_norm,
@@ -150,7 +154,7 @@ def run(args):
 
     rng, _rng = split(rng)
     carry = init_agent_env(split(_rng, args.n_seeds))
-    if args.load_dir:
+    if args.load_dir is not None:
         rng, train_state, env_params, agent_state, obs, env_state = carry
         with open(f'{args.load_dir}/agent_params.pkl', 'rb') as f:
             agent_params = pickle.load(f)
@@ -159,19 +163,15 @@ def run(args):
     step_fn = ppo_step if args.run == 'train' else eval_step
     buffers, rew = [], []
     pbar = tqdm(range(args.n_iters))
-    for _ in pbar:
+    for i_iter in pbar:
         carry, buffer = step_fn(carry, None)
-        rew.append(buffer['rew'])
-        if args.run == 'eval':
+        if i_iter % max(1, args.n_iters // 100) == 0:
+            rew.append(buffer['rew'].mean(axis=-1))
+        if args.run == 'eval' and i_iter % max(1, args.n_iters // 3) == 0:
             buffers.append(buffer)
         pbar.set_postfix(rew=buffer['rew'].mean())
     rng, train_state, env_params, agent_state, obs, env_state = carry
     rew = jnp.stack(rew, axis=1)  # n_seeds, n_iters, n_steps, n_envs
-
-    import matplotlib.pyplot as plt
-    a = buffer['info']['done_trial'][0].T
-    plt.imshow(a)
-    plt.show()
 
     if args.save_dir is not None:
         os.makedirs(args.save_dir, exist_ok=True)

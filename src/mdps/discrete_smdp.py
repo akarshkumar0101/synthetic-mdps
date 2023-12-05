@@ -10,7 +10,7 @@ def eye(key, shape, dtype):
 
 class DiscreteInit(nn.Module):
     n_states: int
-    initializer: nn.initializers.Initializer = nn.initializers.normal(stddev=1.)
+    initializer: nn.initializers.Initializer = nn.initializers.zeros_init()
 
     def setup(self):
         self.logits = self.param('logits', self.initializer, (self.n_states,))

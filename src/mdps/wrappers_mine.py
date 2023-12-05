@@ -222,10 +222,10 @@ class DoneObsActRew(MyGymnaxWrapper):
 
 
 class MetaRLWrapper(MyGymnaxWrapper):
-    def __init__(self, env, n_steps_trial, n_trials):
+    def __init__(self, env, n_trials, n_steps_trial):
         super().__init__(env)
-        self.n_steps_trial = n_steps_trial
         self.n_trials = n_trials
+        self.n_steps_trial = n_steps_trial
 
     def reset_env(self, key, params=None):
         obs, _state = self._env.reset_env(key, params)
@@ -234,15 +234,14 @@ class MetaRLWrapper(MyGymnaxWrapper):
 
     def step_env(self, key, state, action, params=None):
         _state, time = state['_state'], state['time']
+        done_trial = ((time + 1) % self.n_steps_trial == 0)
 
         obs, _state, rew, done, info = self._env.step_env(key, _state, action, params)
-        obs_re, _state_re = self._env.reset_env(key, _state)
-        obs, _state = jax.tree_map(
-            lambda x, y: jax.lax.select((time+1) % self.n_steps_trial == 0, x, y), (obs_re, _state_re), (obs, _state)
-        )
+        obs_re, _state_re = self._env.reset_env(key, params)
+        obs, _state = jax.tree_map(lambda x, y: jax.lax.select(done_trial, x, y), (obs_re, _state_re), (obs, _state))
         state = dict(_state=_state, time=time + 1)
 
-        info['done_trial'] = (time + 1) % self.n_steps_trial == 0
+        info['done_trial'] = done_trial
         return obs, state, rew, done, info
 
 
