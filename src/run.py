@@ -189,4 +189,4 @@ def run(args):
 
 
 if __name__ == "__main__":
-    run(parser.parse_args("--load_dir=None".split()))
+    run(parser.parse_args())
