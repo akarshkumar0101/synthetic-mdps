@@ -138,7 +138,6 @@ def run(args):
             setattr(args, k, None)
     config = vars(args)
     print(f"Args: {args}")
-    return
 
     rng = jax.random.PRNGKey(0)
 
