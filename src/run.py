@@ -102,19 +102,15 @@ def create_env(env_id, n_steps):
     else:
         raise NotImplementedError
 
-    # if 'tl' in env_cfg and env_cfg['tl'].isdigit():
-    #     env = TimeLimit(env, n_steps=int(env_cfg['tl']))
-
     assert "mrl" in env_cfg
     n_trials, n_steps_trial = [int(x) for x in env_cfg['mrl'].split('x')]
     assert n_trials * n_steps_trial == n_steps
     env = MetaRLWrapper(env, n_trials=n_trials, n_steps_trial=n_steps_trial)
-    env = GaussianObsReward(env, n_envs=2048, n_steps=n_steps)
-
     if 'fobs' in env_cfg and env_cfg['fobs'] == 'T':
         env = FlattenObservationWrapper(env)
     if 'rpo' in env_cfg and env_cfg['rpo'].isdigit():
         env = RandomlyProjectObservation(env, d_out=int(env_cfg['rpo']))
+    env = GaussianObsReward(env, n_envs=2048, n_steps=n_steps)
     env = DoneObsActRew(env)
     return env
 
