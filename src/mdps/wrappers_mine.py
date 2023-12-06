@@ -245,34 +245,39 @@ class MetaRLWrapper(MyGymnaxWrapper):
         return obs, state, rew, done, info
 
 
-def step_random_agent(env, rng, n_envs, n_steps):
+def collect_random_agent(env, rng, n_envs, n_steps):
     rng, _rng = split(rng)
     env_params = jax.vmap(env.sample_params)(split(_rng, n_envs))
     rng, _rng = split(rng)
     obs, state = jax.vmap(env.reset)(split(_rng, n_envs), env_params)
-    rews = []
+    os, rs = [], []
     for t in range(n_steps):
         rng, _rng = split(rng)
         act = jax.random.randint(_rng, (n_envs,), 0, env.n_acts)
         rng, _rng = split(rng)
         obs, state, rew, done, info = jax.vmap(env.step)(split(_rng, n_envs), state, act, env_params)
-        rews.append(rew)
-    rews = jnp.stack(rews, axis=1)
-    return rews
+        os.append(obs)
+        rs.append(rew)
+    os, rs = jnp.stack(os, axis=1), jnp.stack(rs, axis=1)
+    return os, rs
 
 
-class GaussianReward(MyGymnaxWrapper):
+class GaussianObsReward(MyGymnaxWrapper):
     def __init__(self, env, n_envs, n_steps):
         super().__init__(env)
-        rews = step_random_agent(env, jax.random.PRNGKey(0), n_envs, n_steps)
-        self.mean = rews.mean()
-        self.std = rews.std()
-        print(self.mean, self.std)
+        obs, rews = collect_random_agent(env, jax.random.PRNGKey(0), n_envs, n_steps)
+        self.mean_obs, self.std_obs = obs.mean(axis=(0, 1)), obs.std(axis=(0, 1))
+        self.mean_rew, self.std_rew = rews.mean(axis=(0, 1)), rews.std(axis=(0, 1))
+        print(f'GaussianObsReward: mean_obs={self.mean_obs}, std_obs={self.std_obs}')
+        print(f'GaussianObsReward: mean_rew={self.mean_rew}, std_rew={self.std_rew}')
 
     def reset_env(self, rng, params=None):
-        return self._env.reset_env(rng, params)
+        obs, state = self._env.reset_env(rng, params)
+        obs = (obs - self.mean_obs) / self.std_obs
+        return obs, state
 
     def step_env(self, rng, state, action, params=None):
         obs, state, rew, done, info = self._env.step_env(rng, state, action, params)
-        rew = (rew - self.mean) / self.std
+        obs = (obs - self.mean_obs) / self.std_obs
+        rew = (rew - self.mean_rew) / self.std_rew
         return obs, state, rew, done, info

@@ -70,16 +70,16 @@ if __name__ == "__main__":
     import numpy as np
     from jax.random import split
     import matplotlib.pyplot as plt
-    from src.mdps.wrappers_mine import step_random_agent, GaussianReward
+    from src.mdps.wrappers_mine import collect_random_agent, GaussianObsReward
 
     rng = jax.random.PRNGKey(0)
     # env = GridEnv(grid_len=8)
     env = Acrobot()
 
-    rews = step_random_agent(env, rng, 1024, 128)
+    rews = collect_random_agent(env, rng, 1024, 128)
     print(rews.mean(), rews.std())
 
-    env = GaussianReward(env, 1024, 128)
+    env = GaussianObsReward(env, 1024, 128)
 
-    rews = step_random_agent(env, rng, 1024, 128)
+    rews = collect_random_agent(env, rng, 1024, 128)
     print(rews.mean(), rews.std())

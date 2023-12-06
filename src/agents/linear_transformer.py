@@ -172,6 +172,79 @@ class LinearTransformerAgent(nn.Module):
         return dict(kTv=kTv, time=time)
 
 
+class DecisionTransformerAgent(nn.Module):
+    n_acts: int
+    n_steps: int
+    n_layers: int
+    n_heads: int
+    d_embd: int
+
+    def setup(self):
+        self.embed_rtg = nn.Dense(features=self.d_embd)
+        self.embed_obs = nn.Dense(features=self.d_embd)
+        self.embed_action = nn.Embed(self.n_acts, features=self.d_embd)
+        self.embed_reward = nn.Dense(features=self.d_embd)
+        self.embed_time = nn.Embed(self.n_steps, features=self.d_embd)
+
+        self.blocks = [Block(n_heads=self.n_heads, d_embd=self.d_embd) for _ in range(self.n_layers)]
+        self.ln = nn.LayerNorm()
+
+        self.actor = nn.Dense(features=self.n_acts,
+                              kernel_init=nn.initializers.orthogonal(0.01),
+                              bias_init=nn.initializers.constant(0.0))
+        self.critic = nn.Dense(features=1)
+
+    def forward_parallel(self, obs):
+        time = jnp.arange(self.n_steps)
+        rtg = obs['rtg']
+        obs, act_p, rew_p = obs['obs'], obs['act_p'], obs['rew_p']
+        assert obs.shape[0] == self.n_steps
+
+        x_rtg = self.embed_rtg(rtg[..., None])  # T, D
+        x_obs = self.embed_obs(obs)  # T, D
+        x_action = self.embed_action(act_p)  # T, D
+        x_reward = self.embed_reward(rew_p[..., None])  # T, D
+        x_time = self.embed_time(time)  # T, D
+        x = x_rtg + x_obs + x_action + x_reward + x_time
+
+        for block in self.blocks:
+            x = block(x)
+        x = self.ln(x)
+        logits = self.actor(x)  # T, A
+        values = self.critic(x)  # T, 1
+        return logits, values[..., 0]
+
+    def forward_recurrent(self, state, obs):
+        kTv, time = state['kTv'], state['time']
+        rtg = obs['rtg']
+        obs, act_p, rew_p = obs['obs'], obs['act_p'], obs['rew_p']
+        # assert time < self.n_steps
+
+        x_rtg = self.embed_rtg(rtg[..., None])  # D
+        x_obs = self.embed_obs(obs)  # D
+        x_action = self.embed_action(act_p)  # D
+        x_reward = self.embed_reward(rew_p[..., None])  # D
+        x_time = self.embed_time(time)  # D
+        x = x_rtg + x_obs + x_action + x_reward + x_time
+
+        kTv_out = [None] * self.n_layers
+        for i in range(self.n_layers):
+            kTv_out[i], x = self.blocks[i].forward_recurrent(kTv[i], x)
+        x = self.ln(x)
+        logits = self.actor(x)  # A
+        values = self.critic(x)  # 1
+        return dict(kTv=kTv_out, time=time+1), (logits, values[..., 0])
+
+    def get_init_state(self, rng):
+        d_head = self.d_embd // self.n_heads
+        kTv = [jnp.zeros((self.n_heads, d_head, d_head)) for _ in range(self.n_layers)]
+        time = jnp.zeros((), dtype=jnp.int32)
+        return dict(kTv=kTv, time=time)
+
+
+
+
+
 def main():
     from functools import partial
 
