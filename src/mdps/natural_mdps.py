@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import gymnax
 
 
+# TODO: rename to DenseCartPole
 class CartPole(gymnax.environments.CartPole):
     def __init__(self):
         super().__init__()
@@ -61,8 +62,6 @@ class Acrobot(gymnax.environments.Acrobot):
         done = jnp.zeros_like(done)
         info["base_env_state"] = state
         return obs, state, rew, done, info
-
-
 
 
 if __name__ == "__main__":
