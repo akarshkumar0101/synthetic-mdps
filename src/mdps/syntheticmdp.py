@@ -1,12 +1,11 @@
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from gymnax.environments import environment, spaces
-import flax.linen as nn
 
 
 class SyntheticMDP(environment.Environment):
-    def __init__(self, n_acts,
-                 model_init, model_trans, model_obs, model_rew, iid_multi_trans=True):
+    def __init__(self, n_acts, model_init, model_trans, model_obs, model_rew, iid_multi_trans=True):
         super().__init__()
         self.n_acts = n_acts
         self.iid_multi_trans = iid_multi_trans
@@ -97,8 +96,6 @@ def main():
     d_state = 10
     d_obs = 32
     n_acts = 4
-
-    from functools import partial
 
     #
     # state = jnp.zeros((d_state,))
