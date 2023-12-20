@@ -52,7 +52,8 @@ class SyntheticMDP(environment.Environment):
         return "SyntheticMDP"
 
     def action_space(self, params):
-        return self.model_trans.action_space(params['params_trans'])
+        # return self.model_trans.action_space(params['params_trans']) #TODO look into this...
+        return self.model_trans.action_space(None)
 
     def observation_space(self, params):
         return self.model_obs.observation_space(params['params_obs'])

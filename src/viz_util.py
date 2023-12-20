@@ -19,10 +19,9 @@ def plot_env_dynamics(env, env_params, xlim=(-3, 3), ylim=(-3, 3)):
     step_fn = jax.vmap(jax.vmap(step_fn, in_axes=(None, 0, None)), in_axes=(None, None, 0))
     _, state_n, _, _, _ = step_fn(_rng, state, act)
     state = repeat(state, 'ij s -> a ij s', a=n_acts)
-    # state, state_n = rearrange(state, 'a ij s -> (a ij) s'), rearrange(state_n, 'a ij s -> (a ij) s')
+    state, state_n = rearrange(state, 'a ij s -> (a ij) s'), rearrange(state_n, 'a ij s -> (a ij) s')
     c = ['r'] * 900 + ['g'] * 900 + ['b'] * 900
-    x, y, xn, yn = state[..., 0].flatten(), state[..., 1].flatten(), state_n[..., 0].flatten(), state_n[..., 1].flatten()
-    plt.quiver(x, y, xn - x, yn - y, angles='xy', scale_units='xy', scale=1, width=0.002, color=c)
+    plt.quiver(*state.T, *(state_n-state).T, angles='xy', scale_units='xy', scale=1, width=0.002, color=c)
 
 
 def plot_start_end_states(env, env_params):
@@ -39,5 +38,21 @@ def plot_start_end_states(env, env_params):
 
 
 def plot_trajectory(states):
-    plt.scatter(*states.T, c=np.arange(len(states)), s=1000, cmap='brg')
+    plt.scatter(*states.T, c=np.arange(len(states)), s=70, cmap='brg')
     plt.colorbar()
+
+# def plot_trajectory(states):
+#     from einops import rearrange
+#     from matplotlib.collections import LineCollection
+#     from matplotlib.colors import BoundaryNorm, ListedColormap
+#
+#     points = rearrange(states, "t d -> t 1 d")
+#     dydx = np.linspace(0, 1, len(states))
+#     segments = np.concatenate([points[:-1], points[1:]], axis=1)
+#
+#     norm = plt.Normalize(dydx.min(), dydx.max())
+#     lc = LineCollection(segments, cmap='brg', norm=norm)
+#     lc.set_array(dydx)
+#     lc.set_linewidth(10)
+#     line = plt.gca().add_collection(lc)
+#     plt.gcf().colorbar(line, ax=plt.gca())

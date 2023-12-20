@@ -20,6 +20,7 @@ from mdps.natural_mdps import CartPole, MountainCar, Acrobot
 from mdps.syntheticmdp import SyntheticMDP
 from mdps.wrappers_mine import RandomlyProjectObservation, DoneObsActRew, FlattenObservationWrapper, \
     GaussianObsReward, MetaRLWrapper
+from mdps import smdp, csmdp
 
 config.update("jax_debug_nans", True)
 
@@ -99,6 +100,14 @@ def create_env(env_id, n_steps):
         model_obs = ContinuousMatrixObs(d_state, d_obs)
         model_rew = ContinuousReward(d_state)
         env = SyntheticMDP(n_acts, model_init, model_trans, model_obs, model_rew)
+    elif env_cfg['name'] == 'new_csmdp':
+        d_state, n_acts = int(env_cfg['d_state']), int(env_cfg['n_acts'])
+        model_init = csmdp.Init(d_state=d_state)
+        model_trans = csmdp.Transition2(d_state=d_state, n_acts=n_acts, delta=True)
+        model_obs = smdp.IdentityObs()
+        model_rew = csmdp.Reward(d_state=d_state)
+        model_done = smdp.NeverDone()
+        env = smdp.SyntheticMDP(model_init, model_trans, model_obs, model_rew, model_done)
     else:
         raise NotImplementedError
 
@@ -110,7 +119,7 @@ def create_env(env_id, n_steps):
         env = FlattenObservationWrapper(env)
     if 'rpo' in env_cfg and env_cfg['rpo'].isdigit():
         env = RandomlyProjectObservation(env, d_out=int(env_cfg['rpo']))
-    env = GaussianObsReward(env, n_envs=2048, n_steps=n_steps)
+    # env = GaussianObsReward(env, n_envs=2048, n_steps=n_steps)
     env = DoneObsActRew(env)
     return env
 

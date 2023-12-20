@@ -53,10 +53,21 @@ class Transition2(nn.Module):
     def setup(self):
         self.embed_act = nn.Embed(self.n_acts, self.d_state)
         self.seq = nn.Sequential([
-            nn.Dense(self.d_state, kernel_init=jax.nn.initializers.orthogonal(),
-                     bias_init=jax.nn.initializers.normal()),
+            nn.Dense(self.d_state*4,
+                     kernel_init=jax.nn.initializers.orthogonal(),
+                     bias_init=jax.nn.initializers.normal(1.)),
             nn.tanh,
-            nn.Dense(self.d_state),
+            nn.Dense(self.d_state*4,
+                     kernel_init=jax.nn.initializers.orthogonal(),
+                     bias_init=jax.nn.initializers.normal(1e-2)),
+            nn.tanh,
+            nn.Dense(self.d_state*4,
+                     kernel_init=jax.nn.initializers.orthogonal(),
+                     bias_init=jax.nn.initializers.normal(1e-2)),
+            nn.tanh,
+            nn.Dense(self.d_state*4,
+                     kernel_init=jax.nn.initializers.orthogonal(),
+                     bias_init=jax.nn.initializers.normal(1e-2)),
             nn.tanh,
             nn.Dense(self.n_acts * self.d_state),
 
