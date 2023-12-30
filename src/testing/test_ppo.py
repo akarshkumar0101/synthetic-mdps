@@ -64,7 +64,7 @@ def main():
 
     carry = init_agent_env(split(rng, 32))
     rets = []
-    pbar = tqdm(range(1000))
+    pbar = tqdm(range(500))
     for _ in pbar:
         carry, buffer = ppo_step(carry, None)
         rets.append(buffer['info']['returned_episode_returns'])
