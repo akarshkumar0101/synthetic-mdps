@@ -13,9 +13,20 @@ def linear_attention(state, qkv):
     T, D = q.shape
     mask = jnp.tril(jnp.ones((T, T), dtype=bool))  # causal masking
     attn = mask * (q @ k.T)
-    out = attn @ v + q @ state
-    state = state + k.T @ v
+    out = attn @ v + q @ state  # T, D + T, D
+    state = state + k.T @ v  # D, D + D, D
     return state, out
+
+# def linear_attention_resets(state, qkv, done):
+#     # state: D, D
+#     q, k, v = qkv  # T, D
+#     # done: T
+#     T, D = q.shape
+#     mask = jnp.tril(jnp.ones((T, T), dtype=bool))  # causal masking
+#     attn = mask * (q @ k.T)
+#     out = attn @ v + q @ state  # T, D + T, D
+#     state = state + k.T @ v  # D, D + D, D
+#     return state, out
 
 
 class MultiHeadAttention(nn.Module):
