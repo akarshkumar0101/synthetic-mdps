@@ -7,30 +7,14 @@ from flax import linen as nn
 from jax.random import split
 
 
-def make_attn_mask(done):
-    T, = done.shape
-    mask_causal = jnp.tril(jnp.ones((T, T), dtype=bool))
-    y, x = jnp.arange(T)[:, None], jnp.arange(T)[None, :]
-
-    def single_causal_done_mask(mask, i):
-        mask_done = ~((y >= i) * (x < i))
-        mask_done = jax.lax.select(done[i], mask_done, mask_causal)
-        return mask * mask_done, None
-
-    mask, _ = jax.lax.scan(single_causal_done_mask, mask_causal, jnp.arange(T))
-    return mask
-
-
-def linear_attention_with_resets(state, qkvdone):  # state: D, D; qkv: T, D; done: T
-    (q, k, v), done = qkvdone
-    done_any, done_before_first, done_after_last = done.any(), done.cumsum() == 0, done.cumsum() == done.sum()
-    q_bef = q * done_before_first[:, None]
-    k_aft = k * done_after_last[:, None]
-    v_aft = v * done_after_last[:, None]
-    mask = make_attn_mask(done)  # T, T
+def linear_attention(state, qkv):
+    # state: D, D
+    q, k, v = qkv  # T, D
+    T, D = q.shape
+    mask = jnp.tril(jnp.ones((T, T), dtype=bool))  # causal masking
     attn = mask * (q @ k.T)
-    out = attn @ v + q_bef @ state
-    state = jax.lax.select(done_any, k_aft.T @ v_aft, state + k_aft.T @ v_aft)
+    out = attn @ v + q @ state  # (T, T) @ (T, D) + (T, D) @ (D, D) = (T, D)
+    state = state + k.T @ v  # (D, D) + (D, T) @ (T, D) = (D, D)
     return state, out
 
 
@@ -42,13 +26,12 @@ class MultiHeadAttention(nn.Module):
         self.lin_qkv = nn.Dense(features=3 * self.d_embd)
         self.lin_out = nn.Dense(features=self.d_embd)
 
-    def __call__(self, state, xdone):
-        x, done = xdone
+    def __call__(self, state, x):
         T, D = x.shape
         assert D == self.d_embd
         qkv = self.lin_qkv(x)  # (T, 3 * D)
         q, k, v = rearrange(qkv, 'T (QKV H Dh) -> QKV H T Dh', QKV=3, H=self.n_heads)  # (H, T, Dh)
-        state, x = jax.vmap(linear_attention_with_resets, in_axes=(0, (0, None)))(state, ((q, k, v), done))
+        state, x = jax.vmap(linear_attention)(state, (q, k, v))  # (H, T, Dh)
         x = rearrange(x, 'H T Dh -> T (H Dh)')  # (T, D)
         x = self.lin_out(x)  # (T, D)
         return state, x
@@ -75,9 +58,8 @@ class Block(nn.Module):
         self.mlp = MLP(d_embd=self.d_embd)
         self.ln2 = nn.LayerNorm()
 
-    def __call__(self, state, xdone):
-        x, done = xdone
-        state, dx = self.mha(state, (self.ln1(x), done))
+    def __call__(self, state, x):
+        state, dx = self.mha(state, self.ln1(x))
         x = x + dx
         x = x + self.mlp(self.ln2(x))
         return state, x
@@ -95,18 +77,17 @@ class ObsActRewTimeEmbed(nn.Module):
     @nn.compact
     def __call__(self, state, x):
         # state: (), x: (T, ...)
-        obs, act_p, rew_p, done = x['obs'], x['act_p'], x['rew_p'], x['done']
+        obs, act_p, rew_p = x['obs'], x['act_p'], x['rew_p']
         T, = act_p.shape
         time = state + jnp.arange(T)
-        time = time - jax.lax.associative_scan(jnp.maximum, time * done)
 
         x_obs = nn.Dense(features=self.d_embd)(obs)  # T, D
         x_act = nn.Embed(self.n_acts, features=self.d_embd)(act_p)  # T, D
         x_rew = nn.Dense(features=self.d_embd)(rew_p[..., None])  # T, D
         x_time = nn.Embed(self.n_steps_max, features=self.d_embd)(time)  # T, D
         x = x_obs + x_act + x_rew + x_time
-        state = time[-1] + 1
-        return state, (x, done)
+        state = state + T
+        return state, x
 
     # def initialize_carry(self, rng):
     #     return jnp.zeros((), dtype=jnp.int32)
@@ -130,12 +111,11 @@ class LinearTransformerAgent(nn.Module):
     @nn.compact
     def __call__(self, state, x):
         state_obs, state_blocks = state['state_obs'], state['state_blocks']
-        state_obs, xdone = self.embed_obs(state_obs, x)
-        x, done = xdone
+        state_obs, x = self.embed_obs(state_obs, x)
 
         state_blocks_out = [None] * self.n_layers
         for i_layer in range(self.n_layers):
-            state_blocks_out[i_layer], x = self.blocks[i_layer](state_blocks[i_layer], (x, done))
+            state_blocks_out[i_layer], x = self.blocks[i_layer](state_blocks[i_layer], x)
 
         x = self.ln(x)
         logits, val = self.actor(x), self.critic(x)  # (T, A) and (T, 1)
@@ -167,13 +147,12 @@ def main():
     agent_state = jax.vmap(agent.initialize_carry)(split(_rng, B))
 
     # ------ INIT ------
-    rng, *_rng = split(rng, 1 + 4)
+    rng, *_rng = split(rng, 1 + 3)
     obs = jax.random.normal(_rng[0], (B, T, 64))
     act = jax.random.randint(_rng[1], (B, T,), 0, n_acts)
     rew = jax.random.normal(_rng[2], (B, T,))
-    done = jax.random.uniform(_rng[3], (B, T)) < 0.1
 
-    obs = dict(obs=obs, act_p=act, rew_p=rew, done=done)
+    obs = dict(obs=obs, act_p=act, rew_p=rew)
 
     rng, _rng = split(rng)
     obs0 = jax.tree_map(lambda x: x[0], obs)
@@ -186,15 +165,34 @@ def main():
     print('obs.shape: ', jax.tree_map(lambda x: x.shape, obs))
 
     # ------ PARALLEL FORWARD ------
-    state1, out1 = forward(agent_state, obs)
-    # print('out1.shape: ', jax.tree_map(lambda x: x.shape, out1))
+    _, out1 = forward(agent_state, obs)
+    print('out1.shape: ', jax.tree_map(lambda x: x.shape, out1))
 
     # ------ RECURRENT FORWARD ------
-    obs = jax.tree_map(lambda x: rearrange(x, 'b t ... -> t b 1 ...'), obs)
-    state2, out2 = jax.lax.scan(forward, agent_state, obs)
+    a = jax.tree_map(lambda x: rearrange(x, 'b t ... -> t b 1 ...'), obs)
+    _, out2 = jax.lax.scan(forward, agent_state, a)
     out2 = jax.tree_map(lambda x: rearrange(x, 't b 1 ... -> b t ...'), out2)
+    print(jax.tree_map(lambda x, y: jnp.allclose(x, y, atol=1e-4).item(), out1, out2))
 
-    print(jax.tree_map(lambda x, y: jnp.allclose(x, y, atol=1e-4).item(), (state1, out1), (state2, out2)))
+    # state, (logits2, values2) = jax.lax.scan(partial(forward_recurrent, params), agent_state, obs_)
+    # logits2 = rearrange(logits2, 't b ... -> b t ...')
+    # values2 = rearrange(values2, 't b ... -> b t ...')
+    #
+    # assert jnp.allclose(logits1, logits2, atol=1e-3)
+    # assert jnp.allclose(values1, values2, atol=1e-3)
+
+
+def temp_test():
+    rng = jax.random.PRNGKey(0)
+    q, k, v = jax.random.normal(rng, (3, 200, 32))
+    state = jnp.zeros((32, 32))
+
+    _, out1 = linear_attention(state, (q, k, v))
+
+    q, k, v = jax.tree_map(lambda x: x.reshape(20, 10, 32), (q, k, v))
+    _, out2 = jax.lax.scan(linear_attention, state, (q, k, v))
+    out2 = out2.reshape(200, 32)
+    print(jnp.allclose(out1, out2, atol=1e-4))
 
 
 if __name__ == '__main__':
