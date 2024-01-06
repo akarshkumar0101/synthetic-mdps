@@ -10,7 +10,9 @@ from jax.random import split
 from matplotlib import pyplot as plt
 from tqdm.auto import tqdm
 
+from agents.linear_transformer import LinearTransformerAgent
 from algos.ppo_dr import PPO
+from mdps.wrappers_mine import DoneObsActRew
 from wrappers import LogWrapper, FlattenObservationWrapper
 
 
@@ -35,18 +37,19 @@ class ActorCritic(nn.Module):
             nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0)),
         ])
 
-    def get_init_state(self, rng):
+    def init_state(self, rng):
         return None
 
-    def forward_recurrent(self, state, obs):  # state.shape: (...); obs.shape:(...)
+    def __call__(self, state, obs):  # state.shape: (...); obs.shape:(T, ...)
         logits = self.seq_pi(obs)
         val = self.seq_critic(obs)
         return state, (logits, val[..., 0])
 
-    def forward_parallel(self, state, obs):  # state.shape: (...); obs.shape:(T, ...)
-        logits = self.seq_pi(obs)
-        val = self.seq_critic(obs)
-        return state, (logits, val[..., 0])
+    def forward_parallel(self, state, obs):
+        return self(state, obs)
+
+    def forward_recurrent(self, state, obs):
+        return self(state, obs)
 
 
 def main():
@@ -54,8 +57,11 @@ def main():
     rng = jax.random.PRNGKey(0)
     env, env_params = gymnax.make("CartPole-v1")
     env = FlattenObservationWrapper(env)
+    # env = DoneObsActRew(env)
     env = LogWrapper(env)
     agent = ActorCritic(env.action_space(env_params).n, activation="tanh")
+    # agent = LinearTransformerAgent(env.action_space(env_params).n,
+    #                                n_steps_max=500, n_layers=1, n_heads=4, d_embd=64)
 
     ppo = PPO(agent, env, sample_env_params=lambda rng: env.default_params)
     init_agent_env = jax.vmap(ppo.init_agent_env)
@@ -82,6 +88,7 @@ def main():
     plt.xlabel('Env Steps')
     plt.show()
     print('done')
+
 
 def main_hyper():
     print('starting')
@@ -117,4 +124,4 @@ def main_hyper():
 
 
 if __name__ == '__main__':
-    main_hyper()
+    main()

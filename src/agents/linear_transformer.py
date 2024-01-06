@@ -142,7 +142,16 @@ class LinearTransformerAgent(nn.Module):
         state = dict(state_obs=state_obs, state_blocks=state_blocks_out)
         return state, (logits, val[..., 0])
 
-    def initialize_carry(self, rng):
+    def forward_parallel(self, state, obs):  # state.shape: (...), obs.shape: (T, ...)
+        return self(state, obs)
+
+    def forward_recurrent(self, state, obs):  # state.shape: (...), obs.shape: (...)
+        obs = jax.tree_map(lambda x: rearrange(x, '... -> 1 ...'), obs)
+        state, (logits, val) = self(state, obs)
+        logits, val = jax.tree_map(lambda x: rearrange(x, '1 ... -> ...'), (logits, val))
+        return state, (logits, val)
+
+    def init_state(self, rng):
         d_head = self.d_embd // self.n_heads
         state_obs = jnp.zeros((), dtype=jnp.int32)
         state_blocks = [jnp.zeros((self.n_heads, d_head, d_head)) for _ in range(self.n_layers)]

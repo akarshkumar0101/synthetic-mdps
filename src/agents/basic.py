@@ -33,7 +33,7 @@ class BasicAgent(nn.Module):
         val = self.seq_critic(obs)
         return state, (logits, val[..., 0])
 
-    def forward_parallel(self, obs):  # shape: (n_steps, ...)
+    def forward_parallel(self, obs):  # shape: (T, ...)
         logits = self.seq_pi(obs)
         val = self.seq_critic(obs)
         return logits, val[..., 0]

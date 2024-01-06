@@ -9,24 +9,11 @@ from flax.training.train_state import TrainState
 from jax.random import split
 
 
-def calc_gae(buffer, val_last, gamma=0.99, gae_lambda=0.95):
-    def calc_gae_step(carry, trans):
-        gae, val_n = carry
-        done, val, rew = trans["done"], trans["val"], trans["rew"]
-        delta = rew + gamma * val_n * (1 - done) - val
-        gae = delta + gamma * gae_lambda * (1 - done) * gae
-        return (gae, val), gae
-
-    _, adv = jax.lax.scan(calc_gae_step, (jnp.zeros_like(val_last), val_last), buffer, reverse=True)
-    ret = adv + buffer['val']
-    return adv, ret
-
-
 class PPO:
-    def __init__(self, agent, env, sample_env_params, *,
+    def __init__(self, agent_student, agent_teacher, env, sample_env_params, *,
                  n_envs=4, n_steps=128, n_updates=16, n_envs_batch=1, lr=2.5e-4, clip_grad_norm=0.5,
                  clip_eps=0.2, vf_coef=0.5, ent_coef=0.01, gamma=0.99, gae_lambda=0.95):
-        self.agent, self.env = agent, env
+        self.agent_student, self.agent_teacher, self.env = agent_student, agent_teacher, env
         self.sample_env_params = sample_env_params
         self.config = dict(n_envs=n_envs, n_steps=n_steps, n_updates=n_updates, n_envs_batch=n_envs_batch,
                            lr=lr, clip_grad_norm=clip_grad_norm, clip_eps=clip_eps, vf_coef=vf_coef, ent_coef=ent_coef,
