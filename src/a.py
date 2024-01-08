@@ -4,23 +4,19 @@ import flax.linen as nn
 
 from functools import partial
 
-import gymnax
 from mdps.wrappers import FlattenObservationWrapper, LogWrapper
-from agents.basic import BasicAgent
 from agents.linear_transformer import LinearTransformerAgent
-from jax.random import split
 
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
-from ppo_general import make_train
+from old.ppo_general import make_train
 
 from mdps.gridworld import GridEnv
 from mdps.discrete_smdp import DiscreteInit, DiscreteTransition, DiscreteObs, DiscreteReward
-from mdps.continuous_smdp import ContinuousInit, ContinuousMatrixTransition, ContinuousMatrixObs, ContinuousReward
 import mdps.discrete_smdp
 from mdps.syntheticmdp import SyntheticMDP
-from mdps.wrappers_mine import TimeLimit, RandomlyProjectObservation, NoReward
+from mdps.wrappers_mine import TimeLimit
 
 
 def main():
@@ -42,7 +38,6 @@ def main():
         "ANNEAL_LR": False,
         "DEBUG": True,
     }
-    from jax.random import split
 
     rng = jax.random.PRNGKey(0)
     n_seeds = 6

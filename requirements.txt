@@ -3,6 +3,7 @@ tqdm
 numpy
 scipy
 einops
+einop
 
 jax[cuda12_pip]
 jaxlib

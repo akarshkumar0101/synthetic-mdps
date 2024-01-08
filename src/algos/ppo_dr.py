@@ -23,7 +23,7 @@ def calc_gae(buffer, val_last, gamma=0.99, gae_lambda=0.95):
 
 
 class PPO:
-    def __init__(self, agent, env, sample_env_params, *,
+    def __init__(self, agent, env, sample_env_params, tx=None, *,
                  n_envs=4, n_steps=128, n_updates=16, n_envs_batch=1, lr=2.5e-4, clip_grad_norm=0.5,
                  clip_eps=0.2, vf_coef=0.5, ent_coef=0.01, gamma=0.99, gae_lambda=0.95):
         self.agent, self.env = agent, env
@@ -36,6 +36,10 @@ class PPO:
         self.lr, self.clip_grad_norm, self.clip_eps = lr, clip_grad_norm, clip_eps
         self.vf_coef, self.ent_coef = vf_coef, ent_coef
         self.gamma, self.gae_lambda = gamma, gae_lambda
+
+        if tx is None:
+            tx = optax.chain(optax.clip_by_global_norm(self.clip_grad_norm), optax.adam(self.lr, eps=1e-5))
+        self.tx = tx
 
     def rollout_step(self, carry, _):
         rng, agent_params, env_params, agent_state, obs, env_state = carry
@@ -130,7 +134,12 @@ class PPO:
         rng, _rng = split(rng)
         env_params = jax.vmap(self.sample_env_params)(split(_rng, self.n_envs))
         rng, _rng = split(rng)
-        agent_state = jax.vmap(self.agent.init_state)(split(_rng, self.n_envs))
+
+        # agent_state = jax.vmap(self.agent.init_state)(split(_rng, self.n_envs))
+        # that doesn't work because it calls init_state method unbounded...
+        init_with_out_init_state = partial(self.agent.init_with_output, method=self.agent.init_state)
+        agent_state, _ = jax.vmap(init_with_out_init_state, in_axes=(None, 0))(rng, split(_rng, self.n_envs))
+
         rng, _rng = split(rng)
         obs, env_state = jax.vmap(self.env.reset)(split(_rng, self.n_envs), env_params)
 
@@ -138,6 +147,5 @@ class PPO:
         rng, _rng = split(rng)
         agent_params = self.agent.init(_rng, agent_state0, obs0, method=self.agent.forward_recurrent)
 
-        tx = optax.chain(optax.clip_by_global_norm(self.clip_grad_norm), optax.adam(self.lr, eps=1e-5))
-        train_state = TrainState.create(apply_fn=self.agent.apply, params=agent_params, tx=tx)
+        train_state = TrainState.create(apply_fn=self.agent.apply, params=agent_params, tx=self.tx)
         return rng, train_state, env_params, agent_state, obs, env_state
