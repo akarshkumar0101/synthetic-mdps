@@ -1,6 +1,6 @@
 import flax.linen as nn
 import jax
-from gymnax.environments import environment
+from gymnax.environments import environment, spaces
 
 
 class SyntheticMDP(environment.Environment):
@@ -73,3 +73,13 @@ class NeverDone(nn.Module):
 
     def __call__(self, state):
         return False
+
+
+class Discrete(spaces.Discrete):
+    def sample(self, rng):
+        return jax.random.randint(rng, (), minval=0, maxval=self.n, dtype=int)
+
+
+class Box(spaces.Box):
+    def sample(self, rng):
+        return jax.random.uniform(rng, self.shape, minval=self.low, maxval=self.high, dtype=None)

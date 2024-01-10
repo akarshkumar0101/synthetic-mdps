@@ -6,6 +6,8 @@ from einops import rearrange
 from flax import linen as nn
 from jax.random import split
 
+from .util import Agent
+
 
 def make_attn_mask(done):
     T, = done.shape
@@ -87,50 +89,50 @@ class Block(nn.Module):
     #     return jnp.zeros((self.n_heads, d_head, d_head))
 
 
-class ObsActRewTimeEmbed(nn.Module):
-    d_embd: int
+# class ObsActRewTimeEmbed(nn.Module):
+#     d_embd: int
+#     n_acts: int
+#     n_steps_max: int
+#
+#     @nn.compact
+#     def __call__(self, state, x):
+#         # state: (), x: (T, ...)
+#         obs, act_p, rew_p, done = x['obs'], x['act_p'], x['rew_p'], x['done']
+#         T, = act_p.shape
+#         time = state + jnp.arange(T)
+#         time = time - jax.lax.associative_scan(jnp.maximum, time * done)
+#
+#         x_obs = nn.Dense(features=self.d_embd)(obs)  # T, D
+#         x_act = nn.Embed(self.n_acts, features=self.d_embd)(act_p)  # T, D
+#         x_rew = nn.Dense(features=self.d_embd)(rew_p[..., None])  # T, D
+#         x_time = nn.Embed(self.n_steps_max, features=self.d_embd)(time)  # T, D
+#         x = x_obs + x_act + x_rew + x_time
+#         state = time[-1] + 1
+#         return state, (x, done)
+
+# def initialize_carry(self, rng):
+#     return jnp.zeros((), dtype=jnp.int32)
+
+
+class LinearTransformerAgent(Agent):
+    ObsEmbed: nn.Module
     n_acts: int
-    n_steps_max: int
 
-    @nn.compact
-    def __call__(self, state, x):
-        # state: (), x: (T, ...)
-        obs, act_p, rew_p, done = x['obs'], x['act_p'], x['rew_p'], x['done']
-        T, = act_p.shape
-        time = state + jnp.arange(T)
-        time = time - jax.lax.associative_scan(jnp.maximum, time * done)
-
-        x_obs = nn.Dense(features=self.d_embd)(obs)  # T, D
-        x_act = nn.Embed(self.n_acts, features=self.d_embd)(act_p)  # T, D
-        x_rew = nn.Dense(features=self.d_embd)(rew_p[..., None])  # T, D
-        x_time = nn.Embed(self.n_steps_max, features=self.d_embd)(time)  # T, D
-        x = x_obs + x_act + x_rew + x_time
-        state = time[-1] + 1
-        return state, (x, done)
-
-    # def initialize_carry(self, rng):
-    #     return jnp.zeros((), dtype=jnp.int32)
-
-
-class LinearTransformerAgent(nn.Module):
-    n_acts: int
-    n_steps_max: int
     n_layers: int
     n_heads: int
     d_embd: int
 
     def setup(self):
-        self.embed_obs = ObsActRewTimeEmbed(d_embd=self.d_embd, n_acts=self.n_acts, n_steps_max=self.n_steps_max)
+        self.obs_embed = self.ObsEmbed()
         self.blocks = [Block(n_heads=self.n_heads, d_embd=self.d_embd) for _ in range(self.n_layers)]
         self.ln = nn.LayerNorm()
         self.actor = nn.Dense(features=self.n_acts, kernel_init=nn.initializers.orthogonal(0.01),
                               bias_init=nn.initializers.constant(0.0))  # T, A
         self.critic = nn.Dense(features=1)  # T, 1
 
-    @nn.compact
     def __call__(self, state, x):
-        state_obs, state_blocks = state['state_obs'], state['state_blocks']
-        state_obs, xdone = self.embed_obs(state_obs, x)
+        oe_state, state_blocks = state['oe_state'], state['state_blocks']
+        oe_state, xdone = self.obs_embed(oe_state, x)
         x, done = xdone
 
         state_blocks_out = [None] * self.n_layers
@@ -139,30 +141,14 @@ class LinearTransformerAgent(nn.Module):
 
         x = self.ln(x)
         logits, val = self.actor(x), self.critic(x)  # (T, A) and (T, 1)
-        state = dict(state_obs=state_obs, state_blocks=state_blocks_out)
+        state = dict(oe_state=oe_state, state_blocks=state_blocks_out)
         return state, (logits, val[..., 0])
-
-    def forward_parallel(self, state, obs):  # state.shape: (...), obs.shape: (T, ...)
-        return self(state, obs)
-
-    def forward_recurrent(self, state, obs):  # state.shape: (...), obs.shape: (...)
-        obs = jax.tree_map(lambda x: rearrange(x, '... -> 1 ...'), obs)
-        state, (logits, val) = self(state, obs)
-        logits, val = jax.tree_map(lambda x: rearrange(x, '1 ... -> ...'), (logits, val))
-        return state, (logits, val)
 
     def init_state(self, rng):
         d_head = self.d_embd // self.n_heads
-        state_obs = jnp.zeros((), dtype=jnp.int32)
+        oe_state = self.obs_embed.init_state(rng)
         state_blocks = [jnp.zeros((self.n_heads, d_head, d_head)) for _ in range(self.n_layers)]
-        return dict(state_obs=state_obs, state_blocks=state_blocks)
-
-    # def initialize_carry(self, rng):
-    #     rng, _rng = split(rng)
-    #     state_obs = ObsActRewTimeEmbed.initialize_carry(_rng)
-    #     rng, *_rng = split(rng, 1 + self.n_layers)
-    #     state_blocks = [Block.initialize_carry(_rng) for block, _rng in zip(self.blocks, _rng)]
-    #     return dict(state_obs=state_obs, state_blocks=state_blocks)
+        return dict(oe_state=oe_state, state_blocks=state_blocks)
 
 
 def main():

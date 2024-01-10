@@ -57,7 +57,8 @@ class PPO:
 
         rng, _rng = split(rng)
         env_params_new = jax.vmap(self.sample_env_params)(split(_rng, self.n_envs))
-        env_params = jax.tree_map(lambda x, y: jax.lax.select(done, x, y), env_params_new, env_params)
+        # jax.vmap is needed because jax.lax.select doesn't support batching by default...
+        env_params = jax.tree_map(lambda x, y: jax.vmap(jax.lax.select)(done, x, y), env_params_new, env_params)
 
         carry = rng, agent_params, env_params, agent_state_n, obs_n, env_state_n
         trans = dict(obs=obs, act=act, rew=rew, done=done, info=info,

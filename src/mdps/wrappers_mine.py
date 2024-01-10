@@ -6,8 +6,8 @@ import gymnax.environments.spaces
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax.random import split
 from gymnax.environments.environment import EnvState, EnvParams
+from jax.random import split
 
 
 # class DictObsEnvironment(GymnaxWrapper):
@@ -130,9 +130,9 @@ Now we only need to implement reset_env and step_env.
 
 
 class TimeLimit(MyGymnaxWrapper):
-    def __init__(self, env, n_steps):
+    def __init__(self, env, n_steps_max):
         super().__init__(env)
-        self.n_steps = n_steps
+        self.n_steps_max = n_steps_max
 
     def reset_env(self, key, params=None):
         obs, env_state = self._env.reset_env(key, params)
@@ -143,7 +143,7 @@ class TimeLimit(MyGymnaxWrapper):
         env_state, time = state['env_state'], state['time']
         obs, env_state, reward, done, info = self._env.step_env(key, env_state, action, params)
         state = dict(env_state=env_state, time=time + 1)
-        done = jnp.logical_or(done, state['time'] >= self.n_steps)
+        done = jnp.logical_or(done, state['time'] >= self.n_steps_max)
         return obs, state, reward, done, info
 
 
@@ -234,7 +234,8 @@ class MetaRLWrapper(MyGymnaxWrapper):
 
     def step_env(self, key, state, action, params=None):
         _state, time = state['_state'], state['time']
-        done_trial = ((time + 1) % self.n_steps_trial == 0)
+        done_trial = (time + 1) % self.n_steps_trial == 0
+        done_all = (time + 1) % (self.n_steps_trial * self.n_trials) == 0
 
         obs, _state, rew, done, info = self._env.step_env(key, _state, action, params)
         obs_re, _state_re = self._env.reset_env(key, params)
@@ -242,6 +243,7 @@ class MetaRLWrapper(MyGymnaxWrapper):
         state = dict(_state=_state, time=time + 1)
 
         info['done_trial'] = done_trial
+        done = done_all
         return obs, state, rew, done, info
 
 

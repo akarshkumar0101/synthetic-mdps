@@ -2,55 +2,77 @@ import argparse
 import json
 import os
 import pickle
+from functools import partial
 
-import flax.linen as nn
+import gymnax
 import jax
 import jax.numpy as jnp
-from jax import config
+import optax
+from einops import rearrange, reduce
+from jax import config as jax_config
 from jax.random import split
+from optax import GradientTransformation, EmptyState
 from tqdm.auto import tqdm
 
-from agents.basic import BasicAgent, RandomAgent
-from agents.linear_transformer import LinearTransformerAgent
-from algos.ppo_fixed_episode import make_ppo_funcs
-from mdps.continuous_smdp import ContinuousInit, ContinuousMatrixTransition, ContinuousMatrixObs, ContinuousReward
-from mdps.discrete_smdp import DiscreteInit, DiscreteTransition, DiscreteObs, DiscreteReward
-from mdps.gridenv import GridEnv
-from mdps.natural_mdps import CartPole, MountainCar, Acrobot
-from mdps.syntheticmdp import SyntheticMDP
-from mdps.wrappers_mine import RandomlyProjectObservation, DoneObsActRew, FlattenObservationWrapper, \
-    GaussianObsReward, MetaRLWrapper
+from agents import BasicAgent, LinearTransformerAgent, DenseObsEmbed, MinAtarObsEmbed, ObsActRewTimeEmbed
+from algos.ppo_dr import PPO
 from mdps import smdp, csmdp
+from mdps.wrappers import LogWrapper
+from mdps.wrappers_mine import DoneObsActRew, MetaRLWrapper, TimeLimit
+from util import tree_stack
 
-config.update("jax_debug_nans", True)
+jax_config.update("jax_debug_nans", True)
 
 parser = argparse.ArgumentParser()
 # experiment args
 parser.add_argument("--n_seeds", type=int, default=1)
-parser.add_argument("--env_id", type=str, default="name=cartpole;mrl=1x128")
-parser.add_argument("--agent_id", type=str, default="linear_transformer")
+
+parser.add_argument("--env_id", type=str, default="name=CartPole-v1")
+parser.add_argument("--agent_id", type=str, default="obs_embed=dense;name=linear_transformer;tl=500")
 
 parser.add_argument("--run", type=str, default='train')
 parser.add_argument("--load_dir", type=str, default=None)
 parser.add_argument("--save_dir", type=str, default=None)
+parser.add_argument("--save_buffers", type=lambda x: x == 'True', default=False)
+parser.add_argument("--save_agent_params", type=lambda x: x == 'True', default=False)
 
-# parser.add_argument("--save_fig", type=str, default=None)
+parser.add_argument("--ft_first_last_layers", type=lambda x: x == 'True', default=False)
+
 parser.add_argument("--n_iters", type=int, default=10)
+# ppo args
+group = parser.add_argument_group("ppo_config")
+group.add_argument("--n_envs", type=int, default=4)
+group.add_argument("--n_steps", type=int, default=128)
+group.add_argument("--n_updates", type=int, default=16)
+group.add_argument("--n_envs_batch", type=int, default=1)
+group.add_argument("--lr", type=float, default=2.5e-4)
+group.add_argument("--clip_grad_norm", type=float, default=0.5)
+group.add_argument("--clip_eps", type=float, default=0.2)
+group.add_argument("--vf_coef", type=float, default=0.5)
+group.add_argument("--ent_coef", type=float, default=0.01)
+group.add_argument("--gamma", type=float, default=0.99)
+group.add_argument("--gae_lambda", type=float, default=0.95)
 
-parser.add_argument("--n_envs", type=int, default=4)
-parser.add_argument("--n_steps", type=int, default=128)
-parser.add_argument("--n_updates", type=int, default=16)
-parser.add_argument("--n_envs_batch", type=int, default=1)
-parser.add_argument("--lr", type=float, default=2.5e-4)
-parser.add_argument("--clip_grad_norm", type=float, default=0.5)
-parser.add_argument("--clip_eps", type=float, default=0.2)
-parser.add_argument("--vf_coef", type=float, default=0.5)
-parser.add_argument("--ent_coef", type=float, default=0.01)
-parser.add_argument("--gamma", type=float, default=0.99)
-parser.add_argument("--gae_lambda", type=float, default=0.95)
+
+def finetune_subset(ft_keys) -> GradientTransformation:
+    def init_fn(params):
+        del params
+        return EmptyState()
+
+    def update_fn(updates, state, params=None):
+        del params  # Unused by the zero transform.
+        updates = jax.tree_map(lambda x: x, updates)  # copy
+        for ft_key in ft_keys:
+            assert ft_key in updates['params']
+        for k in updates['params'].keys():
+            if k not in ft_keys:
+                updates['params'][k] = jax.tree_map(lambda x: jnp.zeros_like(x), updates['params'][k])
+        return updates, state
+
+    return GradientTransformation(init_fn, update_fn)
 
 
-def create_env(env_id, n_steps):
+def create_env(env_id):
     """
     Pretraining Tasks:
     "name=dsmdp;n_states=64;n_acts=4;d_obs=64;rpo=64;tl=4"
@@ -64,133 +86,149 @@ def create_env(env_id, n_steps):
     "name=cartpole;fobs=T;rpo=64;tl=128"
     "name=mountaincar;fobs=T;rpo=64;tl=128"
     "name=acrobot;fobs=T;rpo=64;tl=128"
-
     """
     env_cfg = dict([sub.split('=') for sub in env_id.split(';')])
 
-    if env_cfg['name'] == "cartpole":
-        env = CartPole()
-    elif env_cfg['name'] == "mountaincar":
-        env = MountainCar()
-    elif env_cfg['name'] == "acrobot":
-        env = Acrobot()
-    elif env_cfg['name'] == 'gridenv':
-        grid_len, pos_start, pos_rew = int(env_cfg['grid_len']), env_cfg['pos_start'], env_cfg['pos_rew']
-        env = GridEnv(grid_len, pos_start=pos_start, pos_rew=pos_rew)
-    elif env_cfg['name'] == 'dsmdp':
-        n_states, d_obs, n_acts = int(env_cfg['n_states']), int(env_cfg['d_obs']), int(env_cfg['n_acts'])
-        rdist = nn.initializers.normal(stddev=1.)
-        # if env_cfg['rdist'] == 'U':
-        #     def rdist(key, shape, dtype=float):
-        #         return jax.random.uniform(key, shape, dtype=dtype, minval=-jnp.sqrt(3), maxval=jnp.sqrt(3))
-        # elif env_cfg['rdist'] == 'N':
-        #     rdist = nn.initializers.normal(stddev=1.)
-        # elif config['rdist'] == 'U.24':
-        #     rdist = nn.initializers.uniform(scale=.24)
-        model_init = DiscreteInit(n_states, initializer=nn.initializers.normal(stddev=100))
-        model_trans = DiscreteTransition(n_states, initializer=nn.initializers.normal(stddev=100))
-        model_obs = DiscreteObs(n_states, d_obs)
-        model_rew = DiscreteReward(n_states, initializer=rdist)
-        env = SyntheticMDP(n_acts, model_init, model_trans, model_obs, model_rew)
+    if env_cfg['name'] in gymnax.registered_envs:
+        env, env_params = gymnax.make(env_cfg['name'])
+        env.sample_params = lambda rng: env_params
     elif env_cfg['name'] == 'csmdp':
         d_state, d_obs, n_acts = int(env_cfg['d_state']), int(env_cfg['d_obs']), int(env_cfg['n_acts'])
         delta = env_cfg['delta'] == 'T'
-        model_init = ContinuousInit(d_state)
-        model_trans = ContinuousMatrixTransition(d_state, delta)
-        model_obs = ContinuousMatrixObs(d_state, d_obs)
-        model_rew = ContinuousReward(d_state)
-        env = SyntheticMDP(n_acts, model_init, model_trans, model_obs, model_rew)
-    elif env_cfg['name'] == 'new_csmdp':
-        d_state, n_acts = int(env_cfg['d_state']), int(env_cfg['n_acts'])
         model_init = csmdp.Init(d_state=d_state)
-        model_trans = csmdp.Transition2(d_state=d_state, n_acts=n_acts, delta=True)
-        model_obs = smdp.IdentityObs()
-        model_rew = csmdp.Reward(d_state=d_state)
+        if env_cfg['trans'] == 'linear':
+            model_trans = csmdp.LinearTransition(d_state=d_state, n_acts=n_acts, delta=delta)
+        elif env_cfg['trans'] == 'mlp':
+            model_trans = csmdp.MLPTransition(d_state=d_state, n_acts=n_acts, delta=delta)
+        else:
+            raise NotImplementedError
+        model_obs = csmdp.LinearObservation(d_state=d_state, d_obs=d_obs)
+        if env_cfg['rew'] == 'linear':
+            model_rew = csmdp.LinearReward(d_state=d_state)
+        elif env_cfg['rew'] == 'goal':
+            model_rew = csmdp.GoalReward(d_state=d_state)
+        else:
+            raise NotImplementedError
         model_done = smdp.NeverDone()
         env = smdp.SyntheticMDP(model_init, model_trans, model_obs, model_rew, model_done)
     else:
         raise NotImplementedError
-
-    assert "mrl" in env_cfg
-    n_trials, n_steps_trial = [int(x) for x in env_cfg['mrl'].split('x')]
-    assert n_trials * n_steps_trial == n_steps
-    env = MetaRLWrapper(env, n_trials=n_trials, n_steps_trial=n_steps_trial)
-    if 'fobs' in env_cfg and env_cfg['fobs'] == 'T':
-        env = FlattenObservationWrapper(env)
-    if 'rpo' in env_cfg and env_cfg['rpo'].isdigit():
-        env = RandomlyProjectObservation(env, d_out=int(env_cfg['rpo']))
-    # env = GaussianObsReward(env, n_envs=2048, n_steps=n_steps)
     env = DoneObsActRew(env)
+
+    if "mrl" in env_cfg:
+        n_trials, n_steps_trial = [int(x) for x in env_cfg['mrl'].split('x')]
+        env = MetaRLWrapper(env, n_trials=n_trials, n_steps_trial=n_steps_trial)
+    elif 'tl' in env_cfg:
+        env = TimeLimit(env, n_steps_max=int(env_cfg['tl']))
+    # if 'fobs' in env_cfg and env_cfg['fobs'] == 'T':
+    #     env = FlattenObservationWrapper(env)
+    # if 'rpo' in env_cfg and env_cfg['rpo'].isdigit():
+    #     env = RandomlyProjectObservation(env, d_out=int(env_cfg['rpo']))
+    # env = GaussianObsReward(env, n_envs=2048, n_steps=n_steps)
+
+    env = LogWrapper(env)
     return env
 
 
-def create_agent(agent_id, n_acts, n_steps):
-    if agent_id == 'random':
-        agent = RandomAgent(n_acts)
-    elif agent_id == 'basic':
-        agent = BasicAgent(n_acts)
-    elif agent_id == 'linear_transformer':
-        agent = LinearTransformerAgent(n_acts, n_steps=n_steps, n_layers=2, n_heads=4, d_embd=128)
+def create_agent(agent_id, env_id, n_acts):
+    agent_cfg = dict([sub.split('=') for sub in agent_id.split(';')])
+    env_cfg = dict([sub.split('=') for sub in env_id.split(';')])
+
+    tl = int(agent_cfg['tl'])
+    if 'MinAtar' in env_cfg['name']:
+        ObsEmbed = partial(MinAtarObsEmbed, d_embd=128)
+    else:
+        ObsEmbed = partial(DenseObsEmbed, d_embd=128)
+    ObsEmbed = partial(ObsActRewTimeEmbed, d_embd=128, ObsEmbed=ObsEmbed, n_acts=n_acts, n_steps_max=tl)
+
+    if agent_cfg['name'] == 'random':
+        # agent = RandomAgent(n_acts)
+        raise NotImplementedError
+    elif agent_cfg['name'] == 'basic':
+        agent = BasicAgent(ObsEmbed, n_acts)
+    elif agent_cfg['name'] == 'linear_transformer':
+        agent = LinearTransformerAgent(ObsEmbed, n_acts, n_layers=2, n_heads=4, d_embd=128)
     else:
         raise NotImplementedError
     return agent
 
 
-def run(args):
-    assert args.run in ['train', 'eval']
+def parse_args(inp=None):
+    args = parser.parse_args(inp)
     for k, v in vars(args).items():
         if v == 'None':
             setattr(args, k, None)
-    config = vars(args)
-    print(f"Args: {args}")
+    assert args.run in ['train', 'eval']
+    args.n_updates = 0 if args.run == 'eval' else args.n_updates
+    return args
+
+
+def run(args):
+    cfg = vars(args)
+    print(f"Config: {args}")
 
     rng = jax.random.PRNGKey(0)
 
-    env = create_env(args.env_id, args.n_steps)
-    n_acts = env.action_space(None).n
-    agent = create_agent(args.agent_id, n_acts, args.n_steps)
+    env = create_env(args.env_id)
+    agent = create_agent(args.agent_id, args.env_id, n_acts=env.action_space(None).n)
 
-    init_agent_env, eval_step, ppo_step = make_ppo_funcs(
-        agent, env, args.n_envs, args.n_steps, args.n_updates, args.n_envs_batch, args.lr, args.clip_grad_norm,
-        args.clip_eps, args.vf_coef, args.ent_coef, args.gamma, args.gae_lambda
-    )
-    init_agent_env = jax.vmap(init_agent_env)
-    eval_step = jax.jit(jax.vmap(eval_step, in_axes=(0, None)))
-    ppo_step = jax.jit(jax.vmap(ppo_step, in_axes=(0, None)))
+    ft_transform = finetune_subset(["obs_embed", "actor", "critic"]) if args.ft_first_last_layers else optax.identity()
+    tx = optax.chain(optax.clip_by_global_norm(args.clip_grad_norm), ft_transform, optax.adam(args.lr, eps=1e-5))
+    ppo = PPO(agent, env, sample_env_params=env.sample_params, tx=tx,
+              n_envs=args.n_envs, n_steps=args.n_steps, n_updates=args.n_updates, n_envs_batch=args.n_envs_batch,
+              lr=args.lr, clip_grad_norm=args.clip_grad_norm, clip_eps=args.clip_eps,
+              vf_coef=args.vf_coef, ent_coef=args.ent_coef, gamma=args.gamma, gae_lambda=args.gae_lambda)
+    init_agent_env = jax.vmap(ppo.init_agent_env)
+    # eval_step = jax.jit(jax.vmap(ppo.eval_step, in_axes=(0, None)))
+    ppo_step = jax.jit(jax.vmap(ppo.ppo_step, in_axes=(0, None)))
 
     rng, _rng = split(rng)
     carry = init_agent_env(split(_rng, args.n_seeds))
     if args.load_dir is not None:
         rng, train_state, env_params, agent_state, obs, env_state = carry
+        agent_params_new = train_state.params
         with open(f'{args.load_dir}/agent_params.pkl', 'rb') as f:
-            agent_params = pickle.load(f)
+            agent_params_load = pickle.load(f)
+
+        agent_params = agent_params_load
+        if args.ft_first_last_layers:
+            agent_params['params']['obs_embed'] = agent_params_new['params']['obs_embed']
+            agent_params['params']['actor'] = agent_params_new['params']['actor']
+            agent_params['params']['critic'] = agent_params_new['params']['critic']
+
         train_state = train_state.replace(params=agent_params)
         carry = rng, train_state, env_params, agent_state, obs, env_state
-    step_fn = ppo_step if args.run == 'train' else eval_step
-    rew = []
+
+    rets, buffers = [], []
     pbar = tqdm(range(args.n_iters))
     for i_iter in pbar:
-        carry, buffer = step_fn(carry, None)
-        rew.append(buffer['rew'].mean(axis=-1))
-        pbar.set_postfix(rew=buffer['rew'].mean())
+        carry, buffer = ppo_step(carry, None)
+
+        # rew = reduce(buffer['rew'], 's t e -> s t', reduction='mean')
+        ret = reduce(buffer['info']['returned_episode_returns'], 's t e -> s', reduction='mean')
+        pbar.set_postfix(ret=ret.mean())
+        rets.append(ret)
+        if args.save_buffers:
+            buffers.append(buffer)
     rng, train_state, env_params, agent_state, obs, env_state = carry
-    rew = jnp.stack(rew, axis=1)  # n_seeds, n_iters, n_steps
+    rets = rearrange(rets, 'n s -> s n')  # n_seeds, n_iters
+    if len(buffers) > 0:
+        buffers = tree_stack(buffers)
 
     if args.save_dir is not None:
         os.makedirs(args.save_dir, exist_ok=True)
-        # save config
         with open(f'{args.save_dir}/config.json', 'w') as f:
-            json.dump(config, f, indent=4)
+            json.dump(cfg, f, indent=4)
+        with open(f'{args.save_dir}/rets.pkl', 'wb') as f:
+            pickle.dump(rets, f)
 
-        with open(f'{args.save_dir}/rew.pkl', 'wb') as f:
-            pickle.dump(rew, f)
-        if args.run == 'train':
+        if args.save_agent_params:
             with open(f'{args.save_dir}/agent_params.pkl', 'wb') as f:
                 pickle.dump(train_state.params, f)
-        elif args.run == 'eval':
-            with open(f'{args.save_dir}/buffer.pkl', 'wb') as f:
-                pickle.dump(buffer, f)
+        if args.save_buffers:
+            with open(f'{args.save_dir}/buffers.pkl', 'wb') as f:
+                pickle.dump(buffers, f)
 
 
 if __name__ == "__main__":
-    run(parser.parse_args())
+    run(parse_args())

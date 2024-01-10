@@ -1,15 +1,48 @@
-import jax.numpy as jnp
 import flax.linen as nn
+import jax.numpy as jnp
 import numpy as np
 from flax.linen.initializers import constant, orthogonal
 
+from .util import Agent
 
-class BasicAgent(nn.Module):
+
+class BasicAgent(Agent):
+    ObsEmbed: nn.Module
     n_acts: int
+
     activation: str = "tanh"
 
     def setup(self):
-        activation = nn.relu if self.activation == "relu" else nn.tanh
+        self.obs_embed = self.ObsEmbed()
+        activation = getattr(nn, self.activation)
+        self.seq_main = nn.Sequential([
+            nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)),
+            activation,
+            nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)),
+            activation,
+        ])
+        self.actor = nn.Dense(self.n_acts, kernel_init=orthogonal(0.01), bias_init=constant(0.0))
+        self.critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))
+
+    def __call__(self, state, x):  # state.shape: (...), x.shape: (T, ...)
+        state, x = self.obs_embed(state, x)
+        x = self.seq_main(x)
+        logits, val = self.actor(x), self.critic(x)  # (T, A) and (T, 1)
+        return state, (logits, val[..., 0])
+
+    def init_state(self, rng):
+        return self.obs_embed.init_state(rng)
+
+
+class BasicAgentSeparate(Agent):
+    ObsEmbed: nn.Module
+    n_acts: int
+
+    activation: str = "tanh"
+
+    def setup(self):
+        self.obs_embed = self.ObsEmbed()
+        activation = getattr(nn, self.activation)
         self.seq_pi = nn.Sequential([
             nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)),
             activation,
@@ -25,36 +58,20 @@ class BasicAgent(nn.Module):
             nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0)),
         ])
 
-    def get_init_state(self, rng):
-        return None
-
-    def forward_recurrent(self, state, obs):  # shape: (...)
-        logits = self.seq_pi(obs)
-        val = self.seq_critic(obs)
+    def __call__(self, state, x):  # state.shape: (...), x.shape: (T, ...)
+        state, x = self.obs_embed(state, x)
+        logits, val = self.seq_pi(x), self.seq_critic(x)  # (T, A) and (T, 1)
         return state, (logits, val[..., 0])
 
-    def forward_parallel(self, obs):  # shape: (T, ...)
-        logits = self.seq_pi(obs)
-        val = self.seq_critic(obs)
-        return logits, val[..., 0]
+    def init_state(self, rng):
+        return self.obs_embed.init_state(rng)
 
 
-class RandomAgent(nn.Module):
+class RandomAgent(Agent):
     n_acts: int
 
-    def setup(self):
-        pass
-
-    def get_init_state(self, rng):
-        return None
-
-    def forward_recurrent(self, state, obs):  # shape: (...)
-        logits = jnp.zeros((self.n_acts,))
-        val = jnp.zeros((1,))
+    @nn.compact
+    def __call__(self, state, x):  # state.shape: (...), x.shape: (T, ...)
+        logits, val = jnp.zeros((x.shape[0], self.n_acts))
+        val = jnp.zeros((x.shape[0], 1,))
         return state, (logits, val[..., 0])
-
-    def forward_parallel(self, obs):  # shape: (n_steps, ...)
-        n_steps = obs['obs'].shape[0]
-        logits = jnp.zeros((n_steps, self.n_acts,))
-        val = jnp.zeros((n_steps, 1,))
-        return logits, val[..., 0]

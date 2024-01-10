@@ -4,14 +4,9 @@ import jax.numpy as jnp
 from einops import rearrange
 
 
-class DenseObsEmbed(nn.Module):
-    d_embd: int
-
-    @nn.compact
+class Agent(nn.Module):
     def __call__(self, state, x):  # state.shape: (...), x.shape: (T, ...)
-        x = rearrange(x, 'T ... -> T (...)')
-        x = nn.Dense(features=self.d_embd)(x)  # D
-        return state, x
+        raise NotImplementedError
 
     def forward_parallel(self, state, x):  # state.shape: (...), x.shape: (T, ...)
         return self(state, x)
@@ -26,7 +21,17 @@ class DenseObsEmbed(nn.Module):
         return None
 
 
-class MinAtarObsEmbed(nn.Module):
+class DenseObsEmbed(Agent):
+    d_embd: int
+
+    @nn.compact
+    def __call__(self, state, x):  # state.shape: (...), x.shape: (T, ...)
+        x = rearrange(x, 'T ... -> T (...)')
+        x = nn.Dense(features=self.d_embd)(x)  # D
+        return state, x
+
+
+class MinAtarObsEmbed(Agent):
     d_embd: int
 
     @nn.compact
@@ -41,27 +46,15 @@ class MinAtarObsEmbed(nn.Module):
         x = nn.Dense(features=self.d_embd)(x)  # D
         return state, x
 
-    def forward_parallel(self, state, x):  # state.shape: (...), x.shape: (T, ...)
-        return self(state, x)
 
-    def forward_recurrent(self, state, x):  # state.shape: (...), x.shape: (...)
-        x = jax.tree_map(lambda x: rearrange(x, '... -> 1 ...'), x)
-        state, x = self(state, x)
-        x = jax.tree_map(lambda x: rearrange(x, '1 ... -> ...'), x)
-        return state, x
-
-    def init_state(self, rng):
-        return None
-
-
-class ObsActRewTimeEmbed(nn.Module):
+class ObsActRewTimeEmbed(Agent):
     d_embd: int
     ObsEmbed: nn.Module
     n_acts: int
     n_steps_max: int
 
     def setup(self):
-        self.obs_embed = self.ObsEmbed(d_embd=self.d_embd)
+        self.obs_embed = self.ObsEmbed()
         self.act_embed = nn.Embed(self.n_acts, features=self.d_embd)
         self.rew_embed = nn.Dense(features=self.d_embd)
         self.time_embed = nn.Embed(self.n_steps_max, features=self.d_embd)
@@ -80,15 +73,6 @@ class ObsActRewTimeEmbed(nn.Module):
         time = time[-1] + 1
         state = dict(oe_state=oe_state, time=time)
         return state, (x, done)
-
-    def forward_parallel(self, state, x):  # state.shape: (...), x.shape: (T, ...)
-        return self(state, x)
-
-    def forward_recurrent(self, state, x):  # state.shape: (...), x.shape: (...)
-        x = jax.tree_map(lambda x: rearrange(x, '... -> 1 ...'), x)
-        state, x = self(state, x)
-        x = jax.tree_map(lambda x: rearrange(x, '1 ... -> ...'), x)
-        return state, x
 
     def init_state(self, rng):
         oe_state = self.obs_embed.init_state(rng)
@@ -109,15 +93,6 @@ def main():
             print()
 
 
-env_id2obs_embed = {
-    "CartPole-v1": DenseObsEmbed,
-    "Acrobot-v1": DenseObsEmbed,
-    "MountainCar-v0": DenseObsEmbed,
-    "Asterix-MinAtar": MinAtarObsEmbed,
-    "Breakout-MinAtar": MinAtarObsEmbed,
-    "Freeway-MinAtar": MinAtarObsEmbed,
-    "SpaceInvaders-MinAtar": MinAtarObsEmbed,
-}
 
 if __name__ == "__main__":
     from jax.random import split
