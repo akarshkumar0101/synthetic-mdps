@@ -94,7 +94,7 @@ class LinearReward(nn.Module):
 
 class GoalReward(nn.Module):
     d_state: int
-    dist_thresh: float = 1e-1
+    dist_thresh: float = .356  # ensures 10% of the state space is within the goal
 
     def setup(self):
         bss_init = lambda rng, shape, dtype=None: jax.random.uniform(rng, shape, dtype=dtype, minval=-1., maxval=1.)
