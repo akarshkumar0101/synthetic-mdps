@@ -61,10 +61,10 @@ def experiment_main(dir_exp, n_gpus):
     cfg_default = vars(run.parse_args())
     cfg_train = cfg_default.copy()
     cfg_train.update(n_seeds=1, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
-                     save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=3)
+                     save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=4000)
     cfg_test = cfg_default.copy()
     cfg_test.update(n_seeds=1, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
-                    save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=3, ft_first_last_layers=True, )
+                    save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=4000, ft_first_last_layers=True, )
 
     cfgs = []
     for env_train in envs_train:
@@ -109,12 +109,12 @@ def experiment_main(dir_exp, n_gpus):
 
     txt_eval = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python run.py')
 
-    # txt_train = change_to_n_gpus(txt_train, n_gpus)
-    # txt_eval = change_to_n_gpus(txt_eval, n_gpus)
+    txt_train = change_to_n_gpus(txt_train, n_gpus)
+    txt_eval = change_to_n_gpus(txt_eval, n_gpus)
     txt = f"{txt_header}\n{txt_train}\n{txt_eval}"
     return txt
 
 
 if __name__ == '__main__':
     with open("experiment_main.sh", "w") as f:
-        f.write(experiment_main("../data/exp_main/", 8))
+        f.write(experiment_main("../data/exp_main/", 6))
