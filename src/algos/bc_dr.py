@@ -2,129 +2,88 @@ from functools import partial
 
 import distrax
 import jax
-import jax.numpy as jnp
 import optax
 from einops import rearrange
-from flax.training.train_state import TrainState
 from jax.random import split
 
+from .ppo_dr import PPO
 
-class PPO:
-    def __init__(self, agent_student, agent_teacher, env, sample_env_params, *,
+
+class BC:
+    def __init__(self, agent_student, agent_teacher, agent_params_teacher, env, sample_env_params, tx=None, *,
                  n_envs=4, n_steps=128, n_updates=16, n_envs_batch=1, lr=2.5e-4, clip_grad_norm=0.5,
-                 clip_eps=0.2, vf_coef=0.5, ent_coef=0.01, gamma=0.99, gae_lambda=0.95):
-        self.agent_student, self.agent_teacher, self.env = agent_student, agent_teacher, env
+                 ent_coef=0.0):
+        self.agent_student, self.agent_teacher = agent_student, agent_teacher
+        self.agent_params_teacher = agent_params_teacher
+        self.env = env
         self.sample_env_params = sample_env_params
         self.config = dict(n_envs=n_envs, n_steps=n_steps, n_updates=n_updates, n_envs_batch=n_envs_batch,
-                           lr=lr, clip_grad_norm=clip_grad_norm, clip_eps=clip_eps, vf_coef=vf_coef, ent_coef=ent_coef,
-                           gamma=gamma, gae_lambda=gae_lambda)
+                           lr=lr, clip_grad_norm=clip_grad_norm, ent_coef=ent_coef)
         self.n_envs, self.n_steps = n_envs, n_steps
         self.n_updates, self.n_envs_batch = n_updates, n_envs_batch
-        self.lr, self.clip_grad_norm, self.clip_eps = lr, clip_grad_norm, clip_eps
-        self.vf_coef, self.ent_coef = vf_coef, ent_coef
-        self.gamma, self.gae_lambda = gamma, gae_lambda
+        self.lr, self.clip_grad_norm = lr, clip_grad_norm
+        self.ent_coef = ent_coef
 
-    def rollout_step(self, carry, _):
-        rng, agent_params, env_params, agent_state, obs, env_state = carry
-        # agent
-        forward_recurrent = partial(self.agent.apply, method=self.agent.forward_recurrent)
-        agent_state_n, (logits, val) = jax.vmap(forward_recurrent, in_axes=(None, 0, 0))(agent_params, agent_state, obs)
+        if tx is None:
+            tx = optax.chain(optax.clip_by_global_norm(self.clip_grad_norm), optax.adam(self.lr, eps=1e-5))
+        self.tx = tx
+
+        self.ppo_student = PPO(agent_student, env, sample_env_params, tx=tx, n_envs=n_envs, n_steps=n_steps,
+                               n_updates=0)
+        self.ppo_teacher = PPO(agent_teacher, env, sample_env_params, tx=None, n_envs=n_envs, n_steps=n_steps,
+                               n_updates=0)
+
+    def loss_fn(self, agent_params, agent_state_student, batch_teacher):
+        forward_parallel = partial(self.agent_student.apply, method=self.agent_student.forward_parallel)
+        obs = batch_teacher['obs']
+        _, (logits, val) = jax.vmap(forward_parallel, in_axes=(None, 0, 0))(agent_params, agent_state_student, obs)
         pi = distrax.Categorical(logits=logits)
-        rng, _rng = split(rng)
-        act = pi.sample(seed=_rng)
-        log_prob = pi.log_prob(act)
-        # env
-        rng, _rng = split(rng)
-        obs_n, env_state_n, rew, done, info = jax.vmap(self.env.step)(split(_rng, self.n_envs), env_state, act,
-                                                                      env_params)
-
-        rng, _rng = split(rng)
-        env_params_new = jax.vmap(self.sample_env_params)(split(_rng, self.n_envs))
-        env_params = jax.tree_map(lambda x, y: jax.lax.select(done, x, y), env_params_new, env_params)
-
-        carry = rng, agent_params, env_params, agent_state_n, obs_n, env_state_n
-        trans = dict(obs=obs, act=act, rew=rew, done=done, info=info,
-                     logits=logits, log_prob=log_prob, val=val,
-                     agent_state=agent_state, env_state=env_state)
-        return carry, trans
-
-    def loss_fn(self, agent_params, batch):
-        forward_parallel = partial(self.agent.apply, method=self.agent.forward_parallel)
-        agent_state, obs = jax.tree_map(lambda x: x[:, 0], batch['agent_state']), batch['obs']
-        _, (logits, val) = jax.vmap(forward_parallel, in_axes=(None, 0, 0))(agent_params, agent_state, obs)
-        pi = distrax.Categorical(logits=logits)
-        log_prob = pi.log_prob(batch['act'])
-
-        # value loss
-        value_pred_clipped = batch['val'] + (val - batch['val']).clip(-self.clip_eps, self.clip_eps)
-        value_losses = jnp.square(val - batch['ret'])
-        value_losses_clipped = jnp.square(value_pred_clipped - batch['ret'])
-        value_loss = (0.5 * jnp.maximum(value_losses, value_losses_clipped).mean())
-
-        # policy loss
-        ratio = jnp.exp(log_prob - batch['log_prob'])
-        gae = batch['adv']
-        gae = (gae - gae.mean()) / (gae.std() + 1e-8)
-        loss_actor1 = ratio * gae
-        loss_actor2 = jnp.clip(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * gae
-        loss_actor = -jnp.minimum(loss_actor1, loss_actor2)
-        loss_actor = loss_actor.mean()
+        loss_actor = optax.softmax_cross_entropy_with_integer_labels(logits, batch_teacher['act'])
         entropy = pi.entropy().mean()
-
-        loss = 1.0 * loss_actor + self.vf_coef * value_loss - self.ent_coef * entropy
-        return loss, (value_loss, loss_actor, entropy)
+        loss = 1.0 * loss_actor - self.ent_coef * entropy
+        return loss, (loss_actor, entropy)
 
     def update_batch(self, carry, _):
-        rng, train_state, buffer = carry
+        rng, train_state, agent_state_student, buffer_teacher = carry
 
         rng, _rng = split(rng)
         idx_env = jax.random.permutation(_rng, self.n_envs)[:self.n_envs_batch]
-        batch = jax.tree_util.tree_map(lambda x: x[:, idx_env], buffer)
+        batch = jax.tree_util.tree_map(lambda x: x[:, idx_env], buffer_teacher)
         batch = jax.tree_util.tree_map(lambda x: rearrange(x, 'T B ... -> B T ...'), batch)
+        agent_state_student_batch = jax.tree_map(lambda x: x[idx_env], agent_state_student)
 
         grad_fn = jax.value_and_grad(self.loss_fn, has_aux=True)
-        loss, grads = grad_fn(train_state.params, batch)
+        loss, grads = grad_fn(train_state.params, agent_state_student_batch, batch)
         train_state = train_state.apply_gradients(grads=grads)
-        carry = rng, train_state, buffer
+
+        carry = rng, train_state, agent_state_student, buffer_teacher
         return carry, loss
 
-    def eval_step(self, carry, _):
-        rng, train_state, env_params, agent_state, obs, env_state = carry
-        agent_params = train_state.params
+    def bc_step(self, carry, _):
+        agent_state_student, carry_student, carry_teacher = carry
 
-        carry = rng, agent_params, env_params, agent_state, obs, env_state
-        carry, buffer = jax.lax.scan(self.rollout_step, carry, None, self.n_steps)
-        rng, agent_params, env_params, agent_state, obs, env_state = carry
+        carry_student, buffer_student = self.ppo_student.eval_step(carry_student, None)
+        carry_teacher, buffer_teacher = self.ppo_teacher.eval_step(carry_teacher, None)
 
-        carry = rng, train_state, env_params, agent_state, obs, env_state
-        return carry, buffer
+        rng, train_state, env_params, agent_state, obs, env_state = carry_student
 
-    def ppo_step(self, carry, _):
-        carry, buffer = self.eval_step(carry, None)
-        rng, train_state, env_params, agent_state, obs, env_state = carry
-
-        val_last = buffer['val'][-1]
-        buffer['adv'], buffer['ret'] = calc_gae(buffer, val_last, gamma=self.gamma, gae_lambda=self.gae_lambda)
-
-        carry = rng, train_state, buffer
+        carry = rng, train_state, agent_state_student, buffer_teacher
         carry, losses = jax.lax.scan(self.update_batch, carry, None, self.n_updates)
-        rng, train_state, buffer = carry
+        rng, train_state, agent_state_student, buffer_teacher = carry
 
-        carry = rng, train_state, env_params, agent_state, obs, env_state
-        return carry, buffer
+        carry_student = rng, train_state, env_params, agent_state, obs, env_state
+
+        # update the agent_state_student
+        forward_parallel = partial(self.agent_student.apply, method=self.agent_student.forward_parallel)
+        obs = jax.tree_util.tree_map(lambda x: rearrange(x, 'T B ... -> B T ...'), buffer_teacher['obs'])
+        agent_state_student, _ = jax.vmap(forward_parallel, in_axes=(None, 0, 0))(train_state.params,
+                                                                                  agent_state_student, obs)
+
+        carry = agent_state_student, carry_student, carry_teacher
+        return carry, (buffer_student, buffer_teacher)
 
     def init_agent_env(self, rng):
-        rng, _rng = split(rng)
-        env_params = jax.vmap(self.sample_env_params)(split(_rng, self.n_envs))
-        rng, _rng = split(rng)
-        agent_state = jax.vmap(self.agent.init_state)(split(_rng, self.n_envs))
-        rng, _rng = split(rng)
-        obs, env_state = jax.vmap(self.env.reset)(split(_rng, self.n_envs), env_params)
-
-        agent_state0, obs0 = jax.tree_map(lambda x: x[0], (agent_state, obs))
-        rng, _rng = split(rng)
-        agent_params = self.agent.init(_rng, agent_state0, obs0, method=self.agent.forward_recurrent)
-
-        tx = optax.chain(optax.clip_by_global_norm(self.clip_grad_norm), optax.adam(self.lr, eps=1e-5))
-        train_state = TrainState.create(apply_fn=self.agent.apply, params=agent_params, tx=tx)
-        return rng, train_state, env_params, agent_state, obs, env_state
+        carry_student = self.ppo_student.init_agent_env(rng)
+        carry_teacher = self.ppo_teacher.init_agent_env(rng)  # okay to use same rng
+        _, _, _, agent_state_student, _, _ = carry_student
+        return agent_state_student, carry_student, carry_teacher

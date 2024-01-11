@@ -40,18 +40,17 @@ parser.add_argument("--ft_first_last_layers", type=lambda x: x == 'True', defaul
 
 parser.add_argument("--n_iters", type=int, default=10)
 # ppo args
-group = parser.add_argument_group("ppo_config")
-group.add_argument("--n_envs", type=int, default=4)
-group.add_argument("--n_steps", type=int, default=128)
-group.add_argument("--n_updates", type=int, default=16)
-group.add_argument("--n_envs_batch", type=int, default=1)
-group.add_argument("--lr", type=float, default=2.5e-4)
-group.add_argument("--clip_grad_norm", type=float, default=0.5)
-group.add_argument("--clip_eps", type=float, default=0.2)
-group.add_argument("--vf_coef", type=float, default=0.5)
-group.add_argument("--ent_coef", type=float, default=0.01)
-group.add_argument("--gamma", type=float, default=0.99)
-group.add_argument("--gae_lambda", type=float, default=0.95)
+parser.add_argument("--n_envs", type=int, default=4)
+parser.add_argument("--n_steps", type=int, default=128)
+parser.add_argument("--n_updates", type=int, default=16)
+parser.add_argument("--n_envs_batch", type=int, default=1)
+parser.add_argument("--lr", type=float, default=2.5e-4)
+parser.add_argument("--clip_grad_norm", type=float, default=0.5)
+parser.add_argument("--clip_eps", type=float, default=0.2)
+parser.add_argument("--vf_coef", type=float, default=0.5)
+parser.add_argument("--ent_coef", type=float, default=0.01)
+parser.add_argument("--gamma", type=float, default=0.99)
+parser.add_argument("--gae_lambda", type=float, default=0.95)
 
 
 def finetune_subset(ft_keys) -> GradientTransformation:
@@ -153,8 +152,8 @@ def create_agent(agent_id, env_id, n_acts):
     return agent
 
 
-def parse_args(inp=None):
-    args = parser.parse_args(inp)
+def parse_args(*args, **kwargs):
+    args = parser.parse_args(*args, **kwargs)
     for k, v in vars(args).items():
         if v == 'None':
             setattr(args, k, None)
