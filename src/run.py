@@ -14,7 +14,7 @@ from jax.random import split
 from optax import GradientTransformation, EmptyState
 from tqdm.auto import tqdm
 
-from agents import BasicAgent, LinearTransformerAgent, DenseObsEmbed, MinAtarObsEmbed, ObsActRewTimeEmbed
+from agents import BasicAgent, LinearTransformerAgent, DenseObsEmbed, ObsActRewTimeEmbed
 from algos.ppo_dr import PPO
 from mdps import smdp, csmdp
 from mdps.wrappers import LogWrapper
@@ -135,7 +135,8 @@ def create_agent(agent_id, env_id, n_acts):
 
     tl = int(agent_cfg['tl'])
     if 'MinAtar' in env_cfg['name']:
-        ObsEmbed = partial(MinAtarObsEmbed, d_embd=128)
+        # ObsEmbed = partial(MinAtarObsEmbed, d_embd=128)
+        ObsEmbed = partial(DenseObsEmbed, d_embd=128)
     else:
         ObsEmbed = partial(DenseObsEmbed, d_embd=128)
     ObsEmbed = partial(ObsActRewTimeEmbed, d_embd=128, ObsEmbed=ObsEmbed, n_acts=n_acts, n_steps_max=tl)
@@ -227,6 +228,7 @@ def run(args):
         if args.save_buffers:
             with open(f'{args.save_dir}/buffers.pkl', 'wb') as f:
                 pickle.dump(buffers, f)
+    return rets
 
 
 if __name__ == "__main__":

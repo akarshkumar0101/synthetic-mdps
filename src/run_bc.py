@@ -6,13 +6,14 @@ import pickle
 import jax
 import optax
 from einops import rearrange, reduce
+from einops import repeat
 from jax import config as jax_config
 from jax.random import split
 from tqdm.auto import tqdm
 
 from algos.bc_dr import BC
+from run import create_env, create_agent
 from util import tree_stack
-from .run import create_env, create_agent
 
 jax_config.update("jax_debug_nans", True)
 
@@ -63,6 +64,7 @@ def run(args):
     agent_teacher = create_agent(args.agent_id, args.env_id, n_acts=env.action_space(None).n)
     with open(f'{args.load_dir_teacher}/agent_params.pkl', 'rb') as f:
         agent_params_teacher = pickle.load(f)
+        agent_params_teacher = jax.tree_map(lambda x: x[0], agent_params_teacher)
 
     # ft_transform=finetune_subset(["obs_embed", "actor", "critic"]) if args.ft_first_last_layers else optax.identity()
     ft_transform = optax.identity()
@@ -78,19 +80,24 @@ def run(args):
     rng, _rng = split(rng)
     carry = init_agent_env(split(_rng, args.n_seeds))
     if args.load_dir is not None:
-        rng, train_state, env_params, agent_state, obs, env_state = carry
+        agent_state_student, carry_student, carry_teacher = carry
+        rng, train_state, env_params, agent_state, obs, env_state = carry_student
         agent_params_new = train_state.params
         with open(f'{args.load_dir}/agent_params.pkl', 'rb') as f:
             agent_params_load = pickle.load(f)
+            agent_params_load = jax.tree_map(lambda x: repeat(x, '1 ... -> n ...', n=args.n_seeds), agent_params_load)
 
         agent_params = agent_params_load
-        if args.ft_first_last_layers:
+
+        # if args.ft_first_last_layers:
+        if True:
             agent_params['params']['obs_embed'] = agent_params_new['params']['obs_embed']
             agent_params['params']['actor'] = agent_params_new['params']['actor']
             agent_params['params']['critic'] = agent_params_new['params']['critic']
 
         train_state = train_state.replace(params=agent_params)
-        carry = rng, train_state, env_params, agent_state, obs, env_state
+        carry_student = rng, train_state, env_params, agent_state, obs, env_state
+        carry = agent_state_student, carry_student, carry_teacher
 
     rets_student, rets_teacher, buffers = [], [], []
     pbar = tqdm(range(args.n_iters))
@@ -129,6 +136,7 @@ def run(args):
         if args.save_buffers:
             with open(f'{args.save_dir}/buffers.pkl', 'wb') as f:
                 pickle.dump(buffers, f)
+    return rets_student, rets_teacher
 
 
 if __name__ == "__main__":

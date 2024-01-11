@@ -38,7 +38,7 @@ class BC:
         obs = batch_teacher['obs']
         _, (logits, val) = jax.vmap(forward_parallel, in_axes=(None, 0, 0))(agent_params, agent_state_student, obs)
         pi = distrax.Categorical(logits=logits)
-        loss_actor = optax.softmax_cross_entropy_with_integer_labels(logits, batch_teacher['act'])
+        loss_actor = optax.softmax_cross_entropy_with_integer_labels(logits, batch_teacher['act']).mean()
         entropy = pi.entropy().mean()
         loss = 1.0 * loss_actor - self.ent_coef * entropy
         return loss, (loss_actor, entropy)
@@ -85,5 +85,10 @@ class BC:
     def init_agent_env(self, rng):
         carry_student = self.ppo_student.init_agent_env(rng)
         carry_teacher = self.ppo_teacher.init_agent_env(rng)  # okay to use same rng
+
+        rng, train_state, env_params, agent_state, obs, env_state = carry_teacher
+        train_state = train_state.replace(params=self.agent_params_teacher)
+        carry_teacher = rng, train_state, env_params, agent_state, obs, env_state
+
         _, _, _, agent_state_student, _, _ = carry_student
         return agent_state_student, carry_student, carry_teacher

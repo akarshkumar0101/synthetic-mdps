@@ -1,5 +1,6 @@
 import experiment_utils
 import run
+import run_bc
 
 """
 Pretraining Tasks:
@@ -115,6 +116,99 @@ def experiment_main(dir_exp, n_gpus):
     return txt
 
 
+def experiment_bc_transfer(dir_exp, n_gpus):
+    envs_train = [
+        "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=F;trans=linear;rew=linear;mrl=4x64",
+        "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=F;trans=linear;rew=goal;mrl=4x64",
+        "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=F;trans=mlp;rew=linear;mrl=4x64",
+        "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=F;trans=mlp;rew=goal;mrl=4x64",
+    ]
+    envs_test = [
+        "name=CartPole-v1;tl=500",
+        "name=Acrobot-v1;tl=500",
+        "name=MountainCar-v0;tl=500",
+        "name=Asterix-MinAtar;tl=500",
+        "name=Breakout-MinAtar;tl=500",
+        # "name=Freeway-MinAtar;tl=500",
+        "name=SpaceInvaders-MinAtar;tl=500",
+    ]
+
+    ppo_cfg_default = vars(run.parse_args())
+    bc_cfg_default = vars(run_bc.parse_args())
+    print(ppo_cfg_default)
+    print(bc_cfg_default)
+
+    # ------------------- SYNTHETIC PRETRAINING: PPO -------------------
+    cfgs = []
+    cfg_shared = ppo_cfg_default.copy()
+    cfg_shared.update(n_seeds=1, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
+                      save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=50)
+    for env_train in envs_train:
+        cfg = cfg_shared.copy()
+
+        cfg["env_id"] = env_train
+        cfg["load_dir"] = None
+        cfg["save_dir"] = f"{dir_exp}/pretrain/{env_train}"
+        cfgs.append(cfg)
+    txt_pretrain = experiment_utils.create_command_txt_from_configs(cfgs, ppo_cfg_default,
+                                                                    python_command='python run.py')
+
+    # ------------------- EXPERT TRAINING: PPO -------------------
+    cfgs = []
+    cfg_shared = ppo_cfg_default.copy()
+    cfg_shared.update(n_seeds=1, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
+                      save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=50)
+    for env_test in envs_test:
+        cfg = cfg_shared.copy()
+
+        cfg["env_id"] = env_test
+        cfg["load_dir"] = None
+        cfg["save_dir"] = f"{dir_exp}/expert/{env_test}"
+        cfgs.append(cfg)
+    txt_expert = experiment_utils.create_command_txt_from_configs(cfgs, ppo_cfg_default, python_command='python run.py')
+
+    # ------------------- FINE-TUNE EVALUATION: ICL -------------------
+    # actually, this doesn't work yet because new envs have different obs shape and act space
+
+    # ------------------- FINE-TUNE EVALUATION: BC -------------------
+    cfgs = []
+    cfg_shared = bc_cfg_default.copy()
+    cfg_shared.update(n_seeds=2, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
+                      save_agent_params=True, n_envs=4, n_envs_batch=4, n_iters=50, ft_first_last_layers=False, )
+    for env_test in envs_test:
+        for env_train in envs_train:
+            cfg = cfg_shared.copy()
+            cfg["env_id"] = env_test
+            cfg["load_dir"] = f"{dir_exp}/pretrain/{env_train}"
+            cfg["load_dir_teacher"] = f"{dir_exp}/expert/{env_test}"
+            cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{env_train}"
+            cfgs.append(cfg)
+
+        # random agent - no train
+        cfg = cfg_shared.copy()
+        cfg["env_id"] = env_test
+        cfg["load_dir"] = None
+        cfg["load_dir_teacher"] = f"{dir_exp}/expert/{env_test}"
+        cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{'random_agent'}"
+        cfg["run"] = 'eval'
+        cfgs.append(cfg)
+
+        # random agent - train
+        cfg = cfg_shared.copy()
+        cfg["env_id"] = env_test
+        cfg["load_dir"] = None
+        cfg["load_dir_teacher"] = f"{dir_exp}/expert/{env_test}"
+        cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{'train_random'}"
+        cfgs.append(cfg)
+    txt_eval = experiment_utils.create_command_txt_from_configs(cfgs, bc_cfg_default, python_command='python run_bc.py')
+
+    txt_pretrain = change_to_n_gpus(txt_pretrain, n_gpus)
+    txt_expert = change_to_n_gpus(txt_expert, n_gpus)
+    txt_eval = change_to_n_gpus(txt_eval, n_gpus)
+    txt = f"{txt_header}\n{txt_pretrain}\n{txt_expert}\n{txt_eval}"
+    return txt
+
+
 if __name__ == '__main__':
-    with open("experiment_main.sh", "w") as f:
-        f.write(experiment_main("../data/exp_main/", 6))
+    with open("experiment_tbc.sh", "w") as f:
+        f.write(experiment_bc_transfer("../data/exp_tbc/", 6))
