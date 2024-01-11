@@ -17,6 +17,9 @@ class Init(nn.Module):
         state = self.state_start
         return state
 
+    def state_space(self, params):
+        return Box(-1, 1, (self.d_state,), dtype=jnp.float32)
+
 
 class LinearTransition(nn.Module):
     d_state: int
@@ -29,7 +32,7 @@ class LinearTransition(nn.Module):
     def __call__(self, rng, state, action):
         state_n = rearrange(self.net(state), "(a d) -> a d", a=self.n_acts)[action]
         if self.delta:
-            state_n = state + 3e-2 * state_n
+            state_n = state + .15 * state_n
         state_n = jnp.clip(state_n, -1., 1.)
         return state_n
 
@@ -58,7 +61,7 @@ class MLPTransition(nn.Module):
     def __call__(self, rng, state, action):
         state_n = rearrange(self.net(state), "(a d) -> a d", a=self.n_acts)[action]
         if self.delta:
-            state_n = state + 3e-2 * state_n
+            state_n = state + .15 * state_n
         state_n = jnp.clip(state_n, -1., 1.)
         return state_n
 
@@ -94,13 +97,20 @@ class LinearReward(nn.Module):
 
 class GoalReward(nn.Module):
     d_state: int
-    dist_thresh: float = .356  # ensures 10% of the state space is within the goal
+    dist_thresh: float = None
 
     def setup(self):
+        if self.dist_thresh is None:
+            # 4*(r**n)/2**n = .1
+            # 4*(r**n) = .1 * 2**n
+            # (r**n) = .1 * 2**n / 4
+            # r = (.1 * 2**n / 4)**(1/n)
+            # ensures ~10% of the state space is within the goal
+            self.r = (.1 * (2 ** self.d_state) / 4.) ** (1 / self.d_state)
         bss_init = lambda rng, shape, dtype=None: jax.random.uniform(rng, shape, dtype=dtype, minval=-1., maxval=1.)
         self.state_goal = self.param('state_goal', bss_init, (self.d_state,))
 
     def __call__(self, state):
         dist = jnp.linalg.norm(state - self.state_goal)
-        rew = (dist < self.dist_thresh).astype(jnp.float32)
+        rew = (dist < self.r).astype(jnp.float32)
         return rew

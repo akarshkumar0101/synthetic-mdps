@@ -47,6 +47,12 @@ class SyntheticMDP(environment.Environment):
         info = {}
         return obs, state, rew, done, info
 
+    def get_rew(self, state, params):
+        return self.model_rew.apply(params['params_rew'], state)
+
+    def is_done(self, state, params):
+        return self.model_done.apply(params['params_done'], state)
+
     @property
     def name(self) -> str:
         return "SyntheticMDP"
@@ -57,6 +63,9 @@ class SyntheticMDP(environment.Environment):
 
     def observation_space(self, params):
         return self.model_obs.observation_space(params['params_obs'])
+
+    def state_space(self, params):
+        return self.model_init.state_space(params['params_init'])
 
 
 class IdentityObs(nn.Module):

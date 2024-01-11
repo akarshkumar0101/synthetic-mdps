@@ -1,6 +1,7 @@
 import experiment_utils
 import run
 import run_bc
+import viz_util
 
 """
 Pretraining Tasks:
@@ -118,10 +119,12 @@ def experiment_main(dir_exp, n_gpus):
 
 def experiment_bc_transfer(dir_exp, n_gpus):
     envs_train = [
-        "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=F;trans=linear;rew=linear;mrl=4x64",
-        "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=F;trans=linear;rew=goal;mrl=4x64",
-        "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=F;trans=mlp;rew=linear;mrl=4x64",
-        "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=F;trans=mlp;rew=goal;mrl=4x64",
+        "name=csmdp;d_state=2;d_obs=8;n_acts=4;delta=T;trans=linear;rew=linear;mrl=4x64",
+        "name=csmdp;d_state=2;d_obs=8;n_acts=4;delta=T;trans=linear;rew=goal;mrl=4x64",
+        "name=csmdp;d_state=2;d_obs=8;n_acts=4;delta=T;trans=mlp;rew=linear;mrl=4x64",
+        "name=csmdp;d_state=2;d_obs=8;n_acts=4;delta=T;trans=mlp;rew=goal;mrl=4x64",
+        "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=T;trans=linear;rew=linear;mrl=4x64",
+        "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=T;trans=linear;rew=goal;mrl=4x64",
     ]
     envs_test = [
         "name=CartPole-v1;tl=500",
@@ -133,10 +136,20 @@ def experiment_bc_transfer(dir_exp, n_gpus):
         "name=SpaceInvaders-MinAtar;tl=500",
     ]
 
+    viz_cfg_default = vars(viz_util.parser.parse_args())
     ppo_cfg_default = vars(run.parse_args())
     bc_cfg_default = vars(run_bc.parse_args())
     print(ppo_cfg_default)
     print(bc_cfg_default)
+
+    # ------------------- VIZ envs -------------------
+    cfgs = []
+    for env_train in envs_train:
+        cfg = viz_cfg_default.copy()
+        cfg.update(env_id=env_train, save_dir=f"{dir_exp}/viz/{env_train}")
+        cfgs.append(cfg)
+    txt_viz = experiment_utils.create_command_txt_from_configs(cfgs, viz_cfg_default,
+                                                               python_command='python viz_util.py')
 
     # ------------------- SYNTHETIC PRETRAINING: PPO -------------------
     cfgs = []
@@ -205,7 +218,7 @@ def experiment_bc_transfer(dir_exp, n_gpus):
     txt_pretrain = change_to_n_gpus(txt_pretrain, n_gpus)
     txt_expert = change_to_n_gpus(txt_expert, n_gpus)
     txt_eval = change_to_n_gpus(txt_eval, n_gpus)
-    txt = f"{txt_header}\n{txt_pretrain}\n{txt_expert}\n{txt_eval}"
+    txt = f"{txt_header}\n{txt_viz}\n{txt_pretrain}\n{txt_expert}\n{txt_eval}"
     return txt
 
 
