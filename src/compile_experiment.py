@@ -155,7 +155,7 @@ def experiment_bc_transfer(dir_exp, n_gpus):
     cfgs = []
     cfg_shared = ppo_cfg_default.copy()
     cfg_shared.update(n_seeds=1, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
-                      save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=50)
+                      save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=10000)
     for env_train in envs_train:
         cfg = cfg_shared.copy()
 
@@ -169,8 +169,8 @@ def experiment_bc_transfer(dir_exp, n_gpus):
     # ------------------- EXPERT TRAINING: PPO -------------------
     cfgs = []
     cfg_shared = ppo_cfg_default.copy()
-    cfg_shared.update(n_seeds=1, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
-                      save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=50)
+    cfg_shared.update(n_seeds=8, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
+                      save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=1000)
     for env_test in envs_test:
         cfg = cfg_shared.copy()
 
@@ -186,8 +186,8 @@ def experiment_bc_transfer(dir_exp, n_gpus):
     # ------------------- FINE-TUNE EVALUATION: BC -------------------
     cfgs = []
     cfg_shared = bc_cfg_default.copy()
-    cfg_shared.update(n_seeds=2, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
-                      save_agent_params=True, n_envs=4, n_envs_batch=4, n_iters=50, ft_first_last_layers=False, )
+    cfg_shared.update(n_seeds=32, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
+                      save_agent_params=True, n_envs=4, n_envs_batch=4, n_iters=300, ft_first_last_layers=False, )
     for env_test in envs_test:
         for env_train in envs_train:
             cfg = cfg_shared.copy()

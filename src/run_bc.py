@@ -62,9 +62,12 @@ def run(args):
     env = create_env(args.env_id)
     agent_student = create_agent(args.agent_id, args.env_id, n_acts=env.action_space(None).n)
     agent_teacher = create_agent(args.agent_id, args.env_id, n_acts=env.action_space(None).n)
+    with open(f'{args.load_dir_teacher}/rets.pkl', 'rb') as f:
+        rets_teacher_old = pickle.load(f)  # n_seeds, n_iters
+        best_teacher_idx = rets_teacher_old[:, -1].argmax()
     with open(f'{args.load_dir_teacher}/agent_params.pkl', 'rb') as f:
         agent_params_teacher = pickle.load(f)
-        agent_params_teacher = jax.tree_map(lambda x: x[0], agent_params_teacher)
+        agent_params_teacher = jax.tree_map(lambda x: x[best_teacher_idx], agent_params_teacher)
 
     # ft_transform=finetune_subset(["obs_embed", "actor", "critic"]) if args.ft_first_last_layers else optax.identity()
     ft_transform = optax.identity()
