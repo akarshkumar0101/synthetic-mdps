@@ -169,7 +169,7 @@ def experiment_bc_transfer(dir_exp, n_gpus):
     # ------------------- EXPERT TRAINING: PPO -------------------
     cfgs = []
     cfg_shared = ppo_cfg_default.copy()
-    cfg_shared.update(n_seeds=8, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
+    cfg_shared.update(n_seeds=4, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
                       save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=1000)
     for env_test in envs_test:
         cfg = cfg_shared.copy()
