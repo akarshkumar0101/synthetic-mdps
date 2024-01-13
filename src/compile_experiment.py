@@ -222,6 +222,55 @@ def experiment_bc_transfer(dir_exp, n_gpus):
     return txt
 
 
+def experiment_trans_type(dir_exp, n_gpus):
+    envs_test = [
+        "name=CartPole-v1;tl=500",
+    ]
+
+    ppo_cfg_default = vars(run.parse_args())
+    bc_cfg_default = vars(run_bc.parse_args())
+    print(ppo_cfg_default)
+    print(bc_cfg_default)
+
+    # ------------------- EXPERT TRAINING: PPO -------------------
+    cfgs = []
+    cfg_shared = ppo_cfg_default.copy()
+    cfg_shared.update(n_seeds=4, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
+                      save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=1000)
+    for env_test in envs_test:
+        cfg = cfg_shared.copy()
+
+        cfg["env_id"] = env_test
+        cfg["load_dir"] = None
+        cfg["save_dir"] = f"{dir_exp}/expert/{env_test}"
+        cfgs.append(cfg)
+    txt_expert = experiment_utils.create_command_txt_from_configs(cfgs, ppo_cfg_default, python_command='python run.py')
+
+    # ------------------- FINE-TUNE EVALUATION: BC -------------------
+    cfgs = []
+    cfg_shared = bc_cfg_default.copy()
+    cfg_shared.update(n_seeds=32, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
+                      save_agent_params=True, n_envs=4, n_envs_batch=4, n_iters=300)
+    for env_test in envs_test:
+        for reset_layers in ["first", "last", "first_last", "all"]:
+            for ft_layers in ["first", "last", "first_last", "all"]:
+                cfg = cfg_shared.copy()
+                cfg["env_id"] = env_test
+                cfg["load_dir"] = f"{dir_exp}/expert/{env_test}"
+                cfg["load_dir_teacher"] = f"{dir_exp}/expert/{env_test}"
+                cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{reset_layers}_{ft_layers}"
+
+                cfg["reset_layers"] = reset_layers
+                cfg["ft_layers"] = ft_layers
+                cfgs.append(cfg)
+    txt_eval = experiment_utils.create_command_txt_from_configs(cfgs, bc_cfg_default, python_command='python run_bc.py')
+
+    txt_expert = change_to_n_gpus(txt_expert, n_gpus)
+    txt_eval = change_to_n_gpus(txt_eval, n_gpus)
+    txt = f"{txt_header}\n\n{txt_eval}"
+    return txt
+
+
 if __name__ == '__main__':
-    with open("experiment_tbc.sh", "w") as f:
-        f.write(experiment_bc_transfer("../data/exp_tbc/", 6))
+    with open("experiment_trans_type.sh", "w") as f:
+        f.write(experiment_trans_type("../data/exp_trans_type/", 6))

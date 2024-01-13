@@ -12,7 +12,7 @@ from jax.random import split
 from tqdm.auto import tqdm
 
 from algos.bc_dr import BC
-from run import create_env, create_agent
+from run import create_env, create_agent, finetune_subset
 from util import tree_stack
 
 jax_config.update("jax_debug_nans", True)
@@ -31,7 +31,8 @@ parser.add_argument("--save_dir", type=str, default=None)
 parser.add_argument("--save_buffers", type=lambda x: x == 'True', default=False)
 parser.add_argument("--save_agent_params", type=lambda x: x == 'True', default=False)
 
-parser.add_argument("--ft_first_last_layers", type=lambda x: x == 'True', default=False)
+parser.add_argument("--reset_layers", type=str, default="")
+parser.add_argument("--ft_layers", type=str, default="")
 
 parser.add_argument("--n_iters", type=int, default=10)
 # ppo args
@@ -69,9 +70,16 @@ def run(args):
         agent_params_teacher = pickle.load(f)
         agent_params_teacher = jax.tree_map(lambda x: x[best_teacher_idx], agent_params_teacher)
 
-    # ft_transform=finetune_subset(["obs_embed", "actor", "critic"]) if args.ft_first_last_layers else optax.identity()
-    ft_transform = optax.identity()
-    tx = optax.chain(optax.clip_by_global_norm(args.clip_grad_norm), ft_transform, optax.adam(args.lr, eps=1e-5))
+    if args.ft_layers == "first":
+        ft_trans = finetune_subset(["obs_embed"])
+    elif args.ft_layers == "last":
+        ft_trans = finetune_subset(["actor", "critic"])
+    elif args.ft_layers == "first_last":
+        ft_trans = finetune_subset(["obs_embed", "actor", "critic"])
+    elif args.ft_layers == "all":
+        ft_trans = optax.identity()
+
+    tx = optax.chain(optax.clip_by_global_norm(args.clip_grad_norm), ft_trans, optax.adam(args.lr, eps=1e-5))
 
     bc = BC(agent_student, agent_teacher, agent_params_teacher, env, sample_env_params=env.sample_params, tx=tx,
             n_envs=args.n_envs, n_steps=args.n_steps, n_updates=args.n_updates, n_envs_batch=args.n_envs_batch,
@@ -88,30 +96,41 @@ def run(args):
         agent_params_new = train_state.params
         with open(f'{args.load_dir}/agent_params.pkl', 'rb') as f:
             agent_params_load = pickle.load(f)
-            agent_params_load = jax.tree_map(lambda x: repeat(x, '1 ... -> n ...', n=args.n_seeds), agent_params_load)
+            # agent_params_load = jax.tree_map(lambda x: repeat(x, '1 ... -> n ...', n=args.n_seeds), agent_params_load)
+            agent_params_load = jax.tree_map(lambda x: repeat(x[best_teacher_idx], '... -> n ...', n=args.n_seeds),
+                                             agent_params_load)
 
         agent_params = agent_params_load
 
-        # if args.ft_first_last_layers:
-        if True:
-            agent_params['params']['obs_embed'] = agent_params_new['params']['obs_embed']
-            agent_params['params']['actor'] = agent_params_new['params']['actor']
-            agent_params['params']['critic'] = agent_params_new['params']['critic']
+        if args.reset_layers == 'first':
+            for k in ['obs_embed']:
+                agent_params['params'][k] = agent_params_new['params'][k]
+        elif args.reset_layers == 'last':
+            for k in ['actor', 'critic']:
+                agent_params['params'][k] = agent_params_new['params'][k]
+        elif args.reset_layers == 'first_last':
+            for k in ['obs_embed', 'actor', 'critic']:
+                agent_params['params'][k] = agent_params_new['params'][k]
+        elif args.reset_layers == 'all':
+            for k in agent_params['params'].keys():
+                agent_params['params'][k] = agent_params_new['params'][k]
 
         train_state = train_state.replace(params=agent_params)
         carry_student = rng, train_state, env_params, agent_state, obs, env_state
         carry = agent_state_student, carry_student, carry_teacher
 
     rets_student, rets_teacher, buffers = [], [], []
+    losses = []
     pbar = tqdm(range(args.n_iters))
     for i_iter in pbar:
-        carry, (buffer_student, buffer_teacher) = bc_step(carry, None)
+        carry, (buffer_student, buffer_teacher, loss) = bc_step(carry, None)
 
         ret_student = reduce(buffer_student['info']['returned_episode_returns'], 's t e -> s', reduction='mean')
         ret_teacher = reduce(buffer_teacher['info']['returned_episode_returns'], 's t e -> s', reduction='mean')
         pbar.set_postfix(ret_student=ret_student.mean(), ret_teacher=ret_teacher.mean())
         rets_student.append(ret_student)
         rets_teacher.append(ret_teacher)
+        losses.append(loss)
         if args.save_buffers:
             buffers.append(buffer_student)
 
@@ -120,6 +139,7 @@ def run(args):
 
     rets_student = rearrange(rets_student, 'n s -> s n')  # n_seeds, n_iters
     rets_teacher = rearrange(rets_teacher, 'n s -> s n')  # n_seeds, n_iters
+    losses = rearrange(losses, '... -> ...')
 
     if len(buffers) > 0:
         buffers = tree_stack(buffers)
@@ -132,6 +152,8 @@ def run(args):
             pickle.dump(rets_student, f)
         with open(f'{args.save_dir}/rets_teacher.pkl', 'wb') as f:
             pickle.dump(rets_teacher, f)
+        with open(f'{args.save_dir}/losses.pkl', 'wb') as f:
+            pickle.dump(losses, f)
 
         if args.save_agent_params:
             with open(f'{args.save_dir}/agent_params.pkl', 'wb') as f:

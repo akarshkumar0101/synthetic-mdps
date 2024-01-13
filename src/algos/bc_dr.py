@@ -53,7 +53,7 @@ class BC:
         agent_state_student_batch = jax.tree_map(lambda x: x[idx_env], agent_state_student)
 
         grad_fn = jax.value_and_grad(self.loss_fn, has_aux=True)
-        loss, grads = grad_fn(train_state.params, agent_state_student_batch, batch)
+        ((loss, (loss_actor, entropy)), grads) = grad_fn(train_state.params, agent_state_student_batch, batch)
         train_state = train_state.apply_gradients(grads=grads)
 
         carry = rng, train_state, agent_state_student, buffer_teacher
@@ -80,7 +80,7 @@ class BC:
                                                                                   agent_state_student, obs)
 
         carry = agent_state_student, carry_student, carry_teacher
-        return carry, (buffer_student, buffer_teacher)
+        return carry, (buffer_student, buffer_teacher, losses)
 
     def init_agent_env(self, rng):
         carry_student = self.ppo_student.init_agent_env(rng)
