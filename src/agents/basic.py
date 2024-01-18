@@ -72,6 +72,38 @@ class RandomAgent(Agent):
 
     @nn.compact
     def __call__(self, state, x):  # state.shape: (...), x.shape: (T, ...)
-        logits, val = jnp.zeros((x.shape[0], self.n_acts))
-        val = jnp.zeros((x.shape[0], 1,))
+        logits, val = jnp.zeros((x.shape[0], self.n_acts)), jnp.zeros((x.shape[0], 1,))
         return state, (logits, val[..., 0])
+
+
+class SmallAgent(Agent):
+    ObsEmbed: nn.Module
+    n_acts: int
+    activation: str = "tanh"
+
+    def setup(self):
+        self.obs_embed = self.ObsEmbed()
+        activation = getattr(nn, self.activation)
+        self.actor = nn.Sequential([
+            nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)),
+            activation,
+            nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)),
+            activation,
+            nn.Dense(self.n_acts, kernel_init=orthogonal(0.01), bias_init=constant(0.0))
+        ])
+        self.critic = nn.Sequential([
+            nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)),
+            activation,
+            nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)),
+            activation,
+            nn.Dense(self.n_acts, kernel_init=orthogonal(0.01), bias_init=constant(0.0)),
+            nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))
+        ])
+
+    def __call__(self, state, x):  # state.shape: (...), x.shape: (T, ...)
+        state, x = self.obs_embed(state, x)
+        logits, val = self.actor(x), self.critic(x)  # (T, A) and (T, 1)
+        return state, (logits, val[..., 0])
+
+    def init_state(self, rng):
+        return self.obs_embed.init_state(rng)

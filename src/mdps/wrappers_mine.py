@@ -9,6 +9,9 @@ import numpy as np
 from gymnax.environments.environment import EnvState, EnvParams
 from jax.random import split
 
+from agents import RandomAgent
+from algos.ppo_dr import PPO
+
 
 # class DictObsEnvironment(GymnaxWrapper):
 #     @partial(jax.jit, static_argnums=(0,))
@@ -282,4 +285,30 @@ class GaussianObsReward(MyGymnaxWrapper):
         obs, state, rew, done, info = self._env.step_env(rng, state, action, params)
         obs = (obs - self.mean_obs) / self.std_obs
         rew = (rew - self.mean_rew) / self.std_rew
+        return obs, state, rew, done, info
+
+
+class ObsNormRand(MyGymnaxWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+
+        n_acts = env.action_space(None).n
+        agent = RandomAgent(n_acts)
+        ppo = PPO(agent, env, sample_env_params=env.sample_params, n_envs=1024, n_steps=1024)
+
+        rng = jax.random.PRNGKey(0)
+        carry = ppo.init_agent_env(rng)
+        carry, buffer = ppo.eval_step(carry, None)
+        obs = buffer['obs']
+        self.mean = obs.mean(axis=(0, 1))
+        self.std = obs.std(axis=(0, 1))
+
+    def reset_env(self, key, params):
+        obs, state = self._env.reset_env(key, params)
+        obs = (obs - self.mean) / self.std
+        return obs, state
+
+    def step_env(self, key, state, action, params):
+        obs, state, rew, done, info = self._env.step_env(key, state, action, params)
+        obs = (obs - self.mean) / self.std
         return obs, state, rew, done, info

@@ -18,7 +18,7 @@ from agents import BasicAgent, LinearTransformerAgent, DenseObsEmbed, ObsActRewT
 from algos.ppo_dr import PPO
 from mdps import smdp, csmdp
 from mdps.wrappers import LogWrapper
-from mdps.wrappers_mine import DoneObsActRew, MetaRLWrapper, TimeLimit
+from mdps.wrappers_mine import DoneObsActRew, MetaRLWrapper, TimeLimit, ObsNormRand
 from util import tree_stack
 
 jax_config.update("jax_debug_nans", True)
@@ -112,18 +112,21 @@ def create_env(env_id):
         env = smdp.SyntheticMDP(model_init, model_trans, model_obs, model_rew, model_done)
     else:
         raise NotImplementedError
-    env = DoneObsActRew(env)
+    env = ObsNormRand(env)
 
     if "mrl" in env_cfg:
         n_trials, n_steps_trial = [int(x) for x in env_cfg['mrl'].split('x')]
         env = MetaRLWrapper(env, n_trials=n_trials, n_steps_trial=n_steps_trial)
     elif 'tl' in env_cfg:
         env = TimeLimit(env, n_steps_max=int(env_cfg['tl']))
+
     # if 'fobs' in env_cfg and env_cfg['fobs'] == 'T':
     #     env = FlattenObservationWrapper(env)
     # if 'rpo' in env_cfg and env_cfg['rpo'].isdigit():
     #     env = RandomlyProjectObservation(env, d_out=int(env_cfg['rpo']))
     # env = GaussianObsReward(env, n_envs=2048, n_steps=n_steps)
+
+    env = DoneObsActRew(env)
 
     env = LogWrapper(env)
     return env
@@ -147,7 +150,8 @@ def create_agent(agent_id, env_id, n_acts):
     elif agent_cfg['name'] == 'basic':
         agent = BasicAgent(ObsEmbed, n_acts)
     elif agent_cfg['name'] == 'linear_transformer':
-        agent = LinearTransformerAgent(ObsEmbed, n_acts, n_layers=2, n_heads=4, d_embd=128)
+        agent = LinearTransformerAgent(ObsEmbed, n_acts, n_layers=2, n_heads=4, d_embd=128)  # TODO: go back to this
+        # agent = LinearTransformerAgent(ObsEmbed, n_acts, n_layers=4, n_heads=4, d_embd=128)
     else:
         raise NotImplementedError
     return agent
@@ -225,6 +229,10 @@ def run(args):
         if args.save_agent_params:
             with open(f'{args.save_dir}/agent_params.pkl', 'wb') as f:
                 pickle.dump(train_state.params, f)
+            best_idx = rets[:, -1].argmax()
+            with open(f'{args.save_dir}/agent_params_best.pkl', 'wb') as f:
+                pickle.dump(jax.tree_map(lambda x: x[best_idx], train_state.params), f)
+
         if args.save_buffers:
             with open(f'{args.save_dir}/buffers.pkl', 'wb') as f:
                 pickle.dump(buffers, f)

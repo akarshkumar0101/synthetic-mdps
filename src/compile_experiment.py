@@ -43,97 +43,25 @@ txt_header = "\n".join(["#!/bin/bash",
                         "cd /data/vision/phillipi/akumar01/synthetic-mdps/src", "\n" * 3])
 
 
-def experiment_main(dir_exp, n_gpus):
+def experiment(dir_exp, n_gpus):
+    agent_id = "obs_embed=dense;name=linear_transformer;tl=256"
     envs_train = [
-        "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=F;trans=linear;rew=linear;mrl=4x64",
-        "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=F;trans=linear;rew=goal;mrl=4x64",
-        "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=F;trans=mlp;rew=linear;mrl=4x64",
-        # "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=F;trans=mlp;rew=goal;mrl=4x64",
+        "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=linear;rew=linear;mrl=4x64",
+        "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=linear;rew=goal;mrl=4x64",
+        "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=mlp;rew=linear;mrl=4x64",
+        "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=mlp;rew=goal;mrl=4x64",
+        "name=csmdp;d_state=4;d_obs=4;n_acts=2;delta=T;trans=linear;rew=linear;mrl=4x64",
+        "name=csmdp;d_state=4;d_obs=4;n_acts=2;delta=T;trans=linear;rew=goal;mrl=4x64",
     ]
     envs_test = [
-        "name=CartPole-v1;tl=500",
-        "name=Acrobot-v1;tl=500",
-        "name=MountainCar-v0;tl=500",
-        "name=Asterix-MinAtar;tl=500",
-        "name=Breakout-MinAtar;tl=500",
+        "name=CartPole-v1;tl=256",
+        # "name=CartPole-v1;tl=500",
+        # "name=Acrobot-v1;tl=500",
+        # "name=MountainCar-v0;tl=500",
+        # "name=Asterix-MinAtar;tl=500",
+        # "name=Breakout-MinAtar;tl=500",
         # "name=Freeway-MinAtar;tl=500",
-        "name=SpaceInvaders-MinAtar;tl=500",
-    ]
-
-    cfg_default = vars(run.parse_args())
-    cfg_train = cfg_default.copy()
-    cfg_train.update(n_seeds=1, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
-                     save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=4000)
-    cfg_test = cfg_default.copy()
-    cfg_test.update(n_seeds=1, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
-                    save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=4000, ft_first_last_layers=True, )
-
-    cfgs = []
-    for env_train in envs_train:
-        cfg = cfg_train.copy()
-        cfg["env_id"] = env_train
-        cfg["load_dir"] = None
-        cfg["save_dir"] = f"{dir_exp}/train/{env_train}"
-        cfgs.append(cfg)
-    txt_train = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python run.py')
-
-    cfgs = []
-    for env_test in envs_test:
-        for env_train in envs_train:
-            cfg = cfg_test.copy()
-            cfg["env_id"] = env_test
-            cfg["load_dir"] = f"{dir_exp}/train/{env_train}"
-            cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{env_train}"
-            cfgs.append(cfg)
-
-        # eval random agent
-        cfg = cfg_test.copy()
-        cfg["env_id"] = env_test
-        cfg["load_dir"] = None
-        cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{'random_agent'}"
-        cfg['run'] = 'eval'
-        cfgs.append(cfg)
-
-        # ft random agent
-        cfg = cfg_test.copy()
-        cfg["env_id"] = env_test
-        cfg["load_dir"] = None
-        cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{'ft_random'}"
-        cfgs.append(cfg)
-
-        # train random agent
-        cfg = cfg_test.copy()
-        cfg["env_id"] = env_test
-        cfg["load_dir"] = None
-        cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{'train_random'}"
-        cfg["ft_first_last_layers"] = False
-        cfgs.append(cfg)
-
-    txt_eval = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python run.py')
-
-    txt_train = change_to_n_gpus(txt_train, n_gpus)
-    txt_eval = change_to_n_gpus(txt_eval, n_gpus)
-    txt = f"{txt_header}\n{txt_train}\n{txt_eval}"
-    return txt
-
-
-def experiment_bc_transfer(dir_exp, n_gpus):
-    envs_train = [
-        "name=csmdp;d_state=2;d_obs=8;n_acts=4;delta=T;trans=linear;rew=linear;mrl=4x64",
-        "name=csmdp;d_state=2;d_obs=8;n_acts=4;delta=T;trans=linear;rew=goal;mrl=4x64",
-        "name=csmdp;d_state=2;d_obs=8;n_acts=4;delta=T;trans=mlp;rew=linear;mrl=4x64",
-        "name=csmdp;d_state=2;d_obs=8;n_acts=4;delta=T;trans=mlp;rew=goal;mrl=4x64",
-        "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=T;trans=linear;rew=linear;mrl=4x64",
-        "name=csmdp;d_state=8;d_obs=8;n_acts=4;delta=T;trans=linear;rew=goal;mrl=4x64",
-    ]
-    envs_test = [
-        "name=CartPole-v1;tl=500",
-        "name=Acrobot-v1;tl=500",
-        "name=MountainCar-v0;tl=500",
-        "name=Asterix-MinAtar;tl=500",
-        "name=Breakout-MinAtar;tl=500",
-        # "name=Freeway-MinAtar;tl=500",
-        "name=SpaceInvaders-MinAtar;tl=500",
+        # "name=SpaceInvaders-MinAtar;tl=500",
     ]
 
     viz_cfg_default = vars(viz_util.parser.parse_args())
@@ -154,8 +82,8 @@ def experiment_bc_transfer(dir_exp, n_gpus):
     # ------------------- SYNTHETIC PRETRAINING: PPO -------------------
     cfgs = []
     cfg_shared = ppo_cfg_default.copy()
-    cfg_shared.update(n_seeds=1, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
-                      save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=10000)
+    cfg_shared.update(n_seeds=1, agent_id=agent_id, run='train',
+                      save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=10000)  # 10000
     for env_train in envs_train:
         cfg = cfg_shared.copy()
 
@@ -169,8 +97,8 @@ def experiment_bc_transfer(dir_exp, n_gpus):
     # ------------------- EXPERT TRAINING: PPO -------------------
     cfgs = []
     cfg_shared = ppo_cfg_default.copy()
-    cfg_shared.update(n_seeds=4, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
-                      save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=1000)
+    cfg_shared.update(n_seeds=4, agent_id=agent_id, run='train',
+                      save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=1000)  # 1000
     for env_test in envs_test:
         cfg = cfg_shared.copy()
 
@@ -186,8 +114,9 @@ def experiment_bc_transfer(dir_exp, n_gpus):
     # ------------------- FINE-TUNE EVALUATION: BC -------------------
     cfgs = []
     cfg_shared = bc_cfg_default.copy()
-    cfg_shared.update(n_seeds=32, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
-                      save_agent_params=True, n_envs=4, n_envs_batch=4, n_iters=300, ft_first_last_layers=False, )
+    cfg_shared.update(n_seeds=32, agent_id=agent_id, run='train',
+                      save_agent_params=False, n_envs=4, n_envs_batch=4, n_iters=300,  # 300
+                      reset_layers='last', ft_layers='last')
     for env_test in envs_test:
         for env_train in envs_train:
             cfg = cfg_shared.copy()
@@ -203,7 +132,7 @@ def experiment_bc_transfer(dir_exp, n_gpus):
         cfg["load_dir"] = None
         cfg["load_dir_teacher"] = f"{dir_exp}/expert/{env_test}"
         cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{'random_agent'}"
-        cfg["run"] = 'eval'
+        cfg["lr"] = 0.0
         cfgs.append(cfg)
 
         # random agent - train
@@ -218,59 +147,11 @@ def experiment_bc_transfer(dir_exp, n_gpus):
     txt_pretrain = change_to_n_gpus(txt_pretrain, n_gpus)
     txt_expert = change_to_n_gpus(txt_expert, n_gpus)
     txt_eval = change_to_n_gpus(txt_eval, n_gpus)
-    txt = f"{txt_header}\n{txt_viz}\n{txt_pretrain}\n{txt_expert}\n{txt_eval}"
-    return txt
-
-
-def experiment_trans_type(dir_exp, n_gpus):
-    envs_test = [
-        "name=CartPole-v1;tl=500",
-    ]
-
-    ppo_cfg_default = vars(run.parse_args())
-    bc_cfg_default = vars(run_bc.parse_args())
-    print(ppo_cfg_default)
-    print(bc_cfg_default)
-
-    # ------------------- EXPERT TRAINING: PPO -------------------
-    cfgs = []
-    cfg_shared = ppo_cfg_default.copy()
-    cfg_shared.update(n_seeds=4, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
-                      save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=1000)
-    for env_test in envs_test:
-        cfg = cfg_shared.copy()
-
-        cfg["env_id"] = env_test
-        cfg["load_dir"] = None
-        cfg["save_dir"] = f"{dir_exp}/expert/{env_test}"
-        cfgs.append(cfg)
-    txt_expert = experiment_utils.create_command_txt_from_configs(cfgs, ppo_cfg_default, python_command='python run.py')
-
-    # ------------------- FINE-TUNE EVALUATION: BC -------------------
-    cfgs = []
-    cfg_shared = bc_cfg_default.copy()
-    cfg_shared.update(n_seeds=32, agent_id="obs_embed=dense;name=linear_transformer;tl=500", run='train',
-                      save_agent_params=True, n_envs=4, n_envs_batch=4, n_iters=300)
-    for env_test in envs_test:
-        for reset_layers in ["first", "last", "first_last", "all"]:
-            for ft_layers in ["first", "last", "first_last", "all"]:
-                cfg = cfg_shared.copy()
-                cfg["env_id"] = env_test
-                cfg["load_dir"] = f"{dir_exp}/expert/{env_test}"
-                cfg["load_dir_teacher"] = f"{dir_exp}/expert/{env_test}"
-                cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{reset_layers}_{ft_layers}"
-
-                cfg["reset_layers"] = reset_layers
-                cfg["ft_layers"] = ft_layers
-                cfgs.append(cfg)
-    txt_eval = experiment_utils.create_command_txt_from_configs(cfgs, bc_cfg_default, python_command='python run_bc.py')
-
-    txt_expert = change_to_n_gpus(txt_expert, n_gpus)
-    txt_eval = change_to_n_gpus(txt_eval, n_gpus)
-    txt = f"{txt_header}\n\n{txt_eval}"
+    # txt = f"{txt_header}\n{txt_viz}\n{txt_pretrain}\n{txt_expert}\n{txt_eval}"
+    txt = f"{txt_header}\n\n{txt_pretrain}\n{txt_expert}\n{txt_eval}"
     return txt
 
 
 if __name__ == '__main__':
-    with open("experiment_trans_type.sh", "w") as f:
-        f.write(experiment_trans_type("../data/exp_trans_type/", 6))
+    with open("experiment.sh", "w") as f:
+        f.write(experiment("../data/exp_01_17/", 6))

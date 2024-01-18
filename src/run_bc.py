@@ -63,12 +63,9 @@ def run(args):
     env = create_env(args.env_id)
     agent_student = create_agent(args.agent_id, args.env_id, n_acts=env.action_space(None).n)
     agent_teacher = create_agent(args.agent_id, args.env_id, n_acts=env.action_space(None).n)
-    with open(f'{args.load_dir_teacher}/rets.pkl', 'rb') as f:
-        rets_teacher_old = pickle.load(f)  # n_seeds, n_iters
-        best_teacher_idx = rets_teacher_old[:, -1].argmax()
-    with open(f'{args.load_dir_teacher}/agent_params.pkl', 'rb') as f:
+
+    with open(f'{args.load_dir_teacher}/agent_params_best.pkl', 'rb') as f:
         agent_params_teacher = pickle.load(f)
-        agent_params_teacher = jax.tree_map(lambda x: x[best_teacher_idx], agent_params_teacher)
 
     if args.ft_layers == "first":
         ft_trans = finetune_subset(["obs_embed"])
@@ -78,6 +75,8 @@ def run(args):
         ft_trans = finetune_subset(["obs_embed", "actor", "critic"])
     elif args.ft_layers == "all":
         ft_trans = optax.identity()
+    else:
+        raise NotImplementedError
 
     tx = optax.chain(optax.clip_by_global_norm(args.clip_grad_norm), ft_trans, optax.adam(args.lr, eps=1e-5))
 
@@ -96,11 +95,9 @@ def run(args):
         agent_params_new = train_state.params
         with open(f'{args.load_dir}/agent_params.pkl', 'rb') as f:
             agent_params_load = pickle.load(f)
-            # agent_params_load = jax.tree_map(lambda x: repeat(x, '1 ... -> n ...', n=args.n_seeds), agent_params_load)
-            agent_params_load = jax.tree_map(lambda x: repeat(x[best_teacher_idx], '... -> n ...', n=args.n_seeds),
-                                             agent_params_load)
+            agent_params_load = jax.tree_map(lambda x: repeat(x, '1 ... -> n ...', n=args.n_seeds), agent_params_load)
 
-        agent_params = agent_params_load
+        agent_params = agent_params_load.copy()
 
         if args.reset_layers == 'first':
             for k in ['obs_embed']:
