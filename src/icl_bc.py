@@ -1,3 +1,5 @@
+import argparse
+import os
 import pickle
 from functools import partial
 
@@ -6,6 +8,7 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import optax
+import wandb
 from einops import rearrange
 from flax.training.train_state import TrainState
 from jax.random import split
@@ -39,8 +42,9 @@ from util import tree_stack
 
 
 def main():
+    env_id = 'CartPole-v1'
     rng = jax.random.PRNGKey(0)
-    env, env_params = gymnax.make('CartPole-v1')
+    env, env_params = gymnax.make(env_id)
     env.sample_params = lambda rng: env_params
     env = LogWrapper(env)
     n_acts = env.action_space(env_params).n
@@ -61,18 +65,18 @@ def main():
     rets = []
     for i_iter in tqdm(range(100)):
         carry, buffer = eval_step(carry, None)
-        rets.append(buffer['info']['returned_episode_returns'].mean(axis=(-1, -2)))
+        # rets.append(buffer['info']['returned_episode_returns'].mean(axis=(-1, -2)))
 
     for i_iter in tqdm(range(900)):
         carry, buffer = ppo_step(carry, None)
         rets.append(buffer['info']['returned_episode_returns'].mean(axis=(-1, -2)))
 
     eval_stuff = []
-    for i_iter in tqdm(range(256 * 64)):
+    for i_iter in tqdm(range(256 * 256)):
         carry, buffer = eval_step(carry, None)
-        rets.append(buffer['info']['returned_episode_returns'].mean(axis=(-1, -2)))
+        # rets.append(buffer['info']['returned_episode_returns'].mean(axis=(-1, -2)))
 
-        ks = ['env_state', 'obs', 'logits', 'act', 'rew', 'done']
+        ks = ['obs', 'logits', 'act', 'rew', 'done']
         eval_stuff.append({k: buffer[k] for k in ks})
     rets = rearrange(jnp.stack(rets), 'N S -> S N')
     # print(jax.tree_map(lambda x: x.shape, buffer))
@@ -82,7 +86,7 @@ def main():
     eval_stuff = jax.tree_map(lambda x: rearrange(x, 'N 1 T E ... -> (N E) T ...'), eval_stuff)  # only 0th seed
     print(jax.tree_map(lambda x: x.shape, eval_stuff))
 
-    with open('../data/temp/cartpole_data.pkl', 'wb') as f:
+    with open(f'../data/temp/expert_data_{env_id}.pkl', 'wb') as f:
         pickle.dump(eval_stuff, f)
 
     plt.plot(rets.T, c=[0.1, 0.1, 0.1, 0.1])
@@ -98,36 +102,49 @@ def main():
 #     log_p, log_q = jax.nn.log_softmax(logits_target), jax.nn.log_softmax(logits)
 #     return (jnp.exp(log_p) * (log_p - log_q)).sum(axis=axis)
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--env_id", type=str, default="CartPole-v1")
 
-def main2():
-    with open('../data/temp/cartpole_data.pkl', 'rb') as f:
+parser.add_argument("--load_dir", type=str, default=None)
+parser.add_argument("--save_dir", type=str, default=None)
+
+parser.add_argument("--n_tasks", type=int, default=int(1e9))
+parser.add_argument("--n_iters", type=int, default=10000)
+parser.add_argument("--curriculum", type=str, default="none")
+
+parser.add_argument("--bs", type=int, default=256)
+parser.add_argument("--lr", type=float, default=2.5e-4)
+parser.add_argument("--clip_grad_norm", type=float, default=1.)
+
+
+def main2(args):
+    run = wandb.init(project="synthetic-mdps", entity=None, config=args, save_code=True)
+
+    with open(f'../data/temp/expert_data_{args.env_id}.pkl', 'rb') as f:
         dataset = pickle.load(f)
     obs = dataset['obs']
-    obs = (obs - obs.mean(axis=(0, 1), keepdims=True)) / obs.std(axis=(0, 1), keepdims=True)
+    obs = (obs - obs.mean(axis=(0, 1))) / obs.std(axis=(0, 1))
     dataset['obs'] = obs
+    print('Dataset shape: ', jax.tree_map(lambda x: x.shape, dataset))
 
-    print(jax.tree_map(lambda x: x.shape, dataset))
+    ds_size, T, d_obs = dataset['obs'].shape
+    n_acts = dataset['act'].max() + 1
 
-    ds_size, T, O = dataset['obs'].shape
-    B = 256
-    A = dataset['act'].max() + 1
-    n_tasks = 1000000
-
-    O_universal = 4
-    A_universal = 2
-    assert A <= A_universal
-    A_extra = A_universal - A
+    d_obs_uni = 16
+    n_acts_uni = 4
+    assert n_acts <= n_acts_uni
+    A_extra = n_acts_uni - n_acts
 
     def augment_instance(instance, task_id):
         obs, logits, act = instance['obs'], instance['logits'], instance['act']
-
         rng = jax.random.PRNGKey(task_id)
-
         rng, _rng = split(rng)
-        obs_mat = jax.random.normal(_rng, (O_universal, O)) * (1 / O)
-
+        obs_mat = jax.random.normal(_rng, (d_obs_uni, d_obs)) * (1 / d_obs)
         rng, _rng = split(rng)
-        act_perm = jax.random.permutation(_rng, A_universal)
+        act_perm = jax.random.permutation(_rng, n_acts_uni)
+        # act_perm = jnp.arange(A_universal)
+        i_act_perm = jnp.zeros_like(act_perm)
+        i_act_perm = i_act_perm.at[act_perm].set(jnp.arange(n_acts_uni))
 
         rng, _rng = split(rng)
         time_perm = jax.random.permutation(_rng, T)
@@ -137,45 +154,51 @@ def main2():
         act_aug = act_perm[act]
 
         logits_extra = jnp.full((T, A_extra), -jnp.inf)
-        logits = jnp.concatenate([logits, logits_extra], axis=-1)
-        logits = logits[:, act_perm]
-        # logits = jax.nn.log_softmax(logits, axis=-1)
+        logits_aug = jnp.concatenate([logits, logits_extra], axis=-1)
+        logits_aug = logits_aug[:, i_act_perm]
 
-        return dict(obs=obs_aug[time_perm], logits=logits[time_perm], act=act_aug[time_perm])
+        obs_aug, logits_aug, act_aug = obs_aug[time_perm], logits_aug[time_perm], act_aug[time_perm]
+        return dict(obs=obs_aug, logits=logits_aug, act=act_aug)
 
     rng = jax.random.PRNGKey(0)
 
-    agent = Transformer(n_acts=A_universal, n_layers=4, n_heads=4, d_embd=64, n_steps=T)
-
+    agent = Transformer(n_acts=n_acts_uni, n_layers=4, n_heads=4, d_embd=64, n_steps=T)
     rng, _rng = split(rng)
+    if args.load_dir is not None:
+        with open(f"{args.load_dir}/agent_params.pkl", 'rb') as f:
+            agent_params = pickle.load(f)
+    else:
+        batch = {k: dataset[k][0] for k in ['obs', 'logits', 'act']}
+        batch = augment_instance(batch, 0)
+        agent_params = agent.init(_rng, batch['obs'], batch['act'])
 
-    batch = {k: dataset[k][0] for k in ['obs', 'logits', 'act']}
-    batch = augment_instance(batch, 0)
-    agent_params = agent.init(_rng, batch['obs'], batch['act'])
-
-    tx = optax.chain(optax.clip_by_global_norm(1.), optax.adam(3e-4, eps=1e-8))
+    tx = optax.chain(optax.clip_by_global_norm(args.clip_grad_norm), optax.adam(args.lr, eps=1e-8))
     train_state = TrainState.create(apply_fn=agent.apply, params=agent_params, tx=tx)
 
-    def do_iter(rng, train_state):
+    def do_iter(rng, train_state, n_tasks):
         rng, _rng = split(rng)
-        task_id = jax.random.randint(_rng, (B,), minval=0, maxval=n_tasks)
+        task_id = jax.random.randint(_rng, (args.bs,), minval=0, maxval=n_tasks)
         rng, _rng = split(rng)
-        idx = jax.random.randint(_rng, (B,), minval=0, maxval=ds_size)
-        batch = {k: dataset[k][idx] for k in ['obs', 'logits', 'act']}
+        idx = jax.random.randint(_rng, (args.bs,), minval=0, maxval=ds_size)
+        batch = jax.tree_map(lambda x: x[idx], dataset)
         batch = jax.vmap(augment_instance)(batch, task_id)
 
         def loss_fn(agent_params, batch):
             logits, val = jax.vmap(agent.apply, in_axes=(None, 0, 0))(agent_params, batch['obs'], batch['act'])
 
-            # loss = jax.scipy.special.rel_entr(jax.nn.softmax(batch['logits']), jax.nn.softmax(logits)).sum(axis=-1)
-
             ce_label = optax.softmax_cross_entropy_with_integer_labels(logits, batch['act'])
             kl_div = optax.kl_divergence(jax.nn.log_softmax(logits), jax.nn.softmax(batch['logits']))
             ce_dist = optax.softmax_cross_entropy(jax.nn.log_softmax(logits), jax.nn.softmax(batch['logits']))
+
+            entr = optax.softmax_cross_entropy(jax.nn.log_softmax(logits), jax.nn.softmax(logits))
             tar_entr = optax.softmax_cross_entropy(jax.nn.log_softmax(batch['logits']), jax.nn.softmax(batch['logits']))
+            acc = (batch['act'] == logits.argmax(axis=-1))
+            tar_acc = (batch['act'] == batch['logits'].argmax(axis=-1))
 
             loss = ce_dist
-            return loss.mean(), dict(kl_div=kl_div, ce_label=ce_label, ce_dist=ce_dist, tar_entr=tar_entr)
+
+            data = dict(tar_acc=tar_acc, acc=acc, kl_div=kl_div, ce_label=ce_label, ce_dist=ce_dist, tar_entr=tar_entr)
+            return loss.mean(), data
 
         (_, data), grads = jax.value_and_grad(loss_fn, has_aux=True)(train_state.params, batch)
         train_state = train_state.apply_gradients(grads=grads)
@@ -183,21 +206,47 @@ def main2():
 
     do_iter = jax.jit(do_iter)
 
-    pbar = tqdm(range(1000))
+    pbar = tqdm(range(args.n_iters))
     for i_iter in pbar:
-        rng, train_state, data = do_iter(rng, train_state)
+        if args.curriculum == 'linear_log':
+            n_tasks = int(jnp.e ** ((jnp.log(args.n_tasks) / args.n_iters) * i_iter))
+        else:
+            n_tasks = args.n_tasks
+
+        rng, train_state, data = do_iter(rng, train_state, n_tasks)
         # pbar.set_postfix(loss=loss.mean(), loss0=loss[:, 0].mean(), loss1=loss[:, -1].mean())
         # pbar.set_description(f'ppl={jnp.e ** loss.mean(): 6.4f} tar_ppl={jnp.e ** tar_entr.mean(): 6.4f}')
         kl_div, ce_label, ce_dist, tar_entr = data['kl_div'], data['ce_label'], data['ce_dist'], data['tar_entr']
-        pbar.set_description(f'kl0={kl_div[:, 0].mean(): 6.4f} kl1={kl_div[:, -1].mean(): 6.4f}')
+        tar_acc, acc = data['tar_acc'], data['acc']
+        # pbar.set_description(f'kl0={kl_div[:, 0].mean(): 6.4f} kl1={kl_div[:, -1].mean(): 6.4f}')
 
-    plt.plot(kl_div.mean(axis=0))
-    plt.ylabel('Loss')
-    plt.xlabel('In context timesteps')
-    plt.title('Randomized env timesteps')
-    # plt.axhline(jnp.e ** tar_entr.mean(), c='r')
-    plt.show()
+        if i_iter % max(1, args.n_iters // 1000) == 0:
+            wandb_data = dict(
+                n_tasks=n_tasks,
+                kl=kl_div.mean(), kl0=kl_div[:, 0].mean(), kl1=kl_div[:, -1].mean(),
+                ce=ce_dist.mean(), ce0=ce_dist[:, 0].mean(), ce1=ce_dist[:, -1].mean(),
+                tar_acc=tar_acc.mean(),
+                acc=acc.mean(), acc0=acc[:, 0].mean(), acc1=acc[:, -1].mean(),
+            )
+            wandb.log(wandb_data, step=i_iter)
+
+    if args.save_dir is not None:
+        os.makedirs(f"{args.save_dir}/", exist_ok=True)
+        with open(f"{args.save_dir}/agent_params.pkl", 'wb') as f:
+            pickle.dump(train_state.params, f)
+
+    wandb.finish()
+
+    # plt.subplot(121)
+    # plt.plot(kl_div.mean(axis=0))
+    # plt.ylabel('Loss')
+    # plt.xlabel('In context timesteps')
+    # plt.title('Randomized env timesteps')
+    # # plt.axhline(jnp.e ** tar_entr.mean(), c='r')
+    # plt.subplot(122)
+    # plt.plot(acc.mean(axis=0))
+    # plt.show()
 
 
 if __name__ == '__main__':
-    main2()
+    main2(parser.parse_args())
