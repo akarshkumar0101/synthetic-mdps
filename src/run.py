@@ -126,7 +126,7 @@ def create_env(env_id):
     #     env = RandomlyProjectObservation(env, d_out=int(env_cfg['rpo']))
     # env = GaussianObsReward(env, n_envs=2048, n_steps=n_steps)
 
-    env = DoneObsActRew(env)
+    # env = DoneObsActRew(env)
 
     env = LogWrapper(env)
     return env

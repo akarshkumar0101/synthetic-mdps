@@ -40,8 +40,7 @@ from util import tree_stack
 #         rew = a
 #         return obs, state, rew, done, info
 
-
-def main():
+def get_real_env_dataset():
     env_id = 'CartPole-v1'
     rng = jax.random.PRNGKey(0)
     env, env_params = gymnax.make(env_id)
@@ -96,6 +95,58 @@ def main():
     plt.xlabel('Training Iteration')
 
     plt.show()
+
+
+import run
+import util
+
+
+def get_syn_env_dataset():
+    env_id = "name=csmdp;d_state=2;d_obs=4;n_acts=4;delta=T;trans=linear;rew=goal;tl=64"
+
+    env = run.create_env(env_id)
+    ObsEmbed = partial(DenseObsEmbed, d_embd=32)
+    agent = BasicAgentSeparate(ObsEmbed, 4)
+
+    def get_dataset(rng):
+        rng, _rng = split(rng)
+        env_params = env.sample_params(_rng)
+
+        ppo = PPO(agent, env, sample_env_params=lambda rng: env_params,
+                  n_envs=4, n_steps=128, n_updates=16, n_envs_batch=1, lr=2.5e-4, clip_grad_norm=0.5,
+                  clip_eps=0.2, vf_coef=0.5, ent_coef=0.01, gamma=0.99, gae_lambda=0.95)
+
+        rng, _rng = split(rng)
+        carry = ppo.init_agent_env(_rng)
+
+        carry, buffer = jax.lax.scan(ppo.ppo_step, carry, xs=None, length=100)
+        rets = buffer['info']['returned_episode_returns']
+
+        carry, buffer = jax.lax.scan(ppo.eval_step, carry, xs=None, length=1)
+        buffer = jax.tree_map(lambda x: rearrange(x, 'N T E ... -> (N E) T ...'), buffer)
+        dataset = {k: buffer[k] for k in ['obs', 'logits', 'act']}
+        return rets, dataset
+
+    rng = jax.random.PRNGKey(0)
+    rets, dataset = [], []
+    for _ in tqdm(range(6)):
+        rng, _rng = split(rng)
+        retsi, dataseti = jax.jit(jax.vmap(get_dataset))(split(rng, 64))
+        rets.append(retsi)
+        dataset.append(dataseti)
+    rets = util.tree_stack(rets)
+    dataset = util.tree_stack(dataset)
+    dataset = jax.tree_map(lambda x: rearrange(x, 'A B C T ... -> (A B C) T ...'), dataset)
+
+    print(rets.shape)
+    plt.plot(rets.mean(axis=(0, 1, -1, -2)))
+    plt.ylabel('Return')
+    plt.xlabel('Training Iteration')
+    plt.show()
+
+    print(jax.tree_map(lambda x: x.shape, dataset))
+    with open(f'../data/temp/expert_data_{"synthetic"}.pkl', 'wb') as f:
+        pickle.dump(dataset, f)
 
 
 # def kl_div(logits, logits_target, axis=-1):
@@ -191,7 +242,8 @@ def main2(args):
             ce_dist = optax.softmax_cross_entropy(jax.nn.log_softmax(logits), jax.nn.softmax(batch['logits']))
 
             entr = optax.softmax_cross_entropy(jax.nn.log_softmax(logits), jax.nn.softmax(logits))
-            tar_entr = optax.softmax_cross_entropy(jax.nn.log_softmax(batch['logits']), jax.nn.softmax(batch['logits']))
+            # tar_entr = optax.softmax_cross_entropy(jax.nn.log_softmax(batch['logits']), jax.nn.softmax(batch['logits']))
+            tar_entr = 0
             acc = (batch['act'] == logits.argmax(axis=-1))
             tar_acc = (batch['act'] == batch['logits'].argmax(axis=-1))
 
@@ -250,3 +302,4 @@ def main2(args):
 
 if __name__ == '__main__':
     main2(parser.parse_args())
+    # get_syn_env_dataset()
