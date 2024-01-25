@@ -1,7 +1,5 @@
 import experiment_utils
-import run
-import run_bc
-import viz_util
+import icl_bc
 
 """
 Pretraining Tasks:
@@ -64,94 +62,99 @@ def experiment(dir_exp, n_gpus):
         # "name=SpaceInvaders-MinAtar;tl=500",
     ]
 
-    viz_cfg_default = vars(viz_util.parser.parse_args())
-    ppo_cfg_default = vars(run.parse_args())
-    bc_cfg_default = vars(run_bc.parse_args())
-    print(ppo_cfg_default)
-    print(bc_cfg_default)
+    envs = [
+        "CartPole-v1",
+        "Acrobot-v1",
+        "synthetic"
+    ]
+
+    cfg_default = vars(icl_bc.parse_args())
+    print(cfg_default)
 
     # ------------------- VIZ envs -------------------
+    # cfgs = []
+    # for env_train in envs_train:
+    #     cfg = viz_cfg_default.copy()
+    #     cfg.update(env_id=env_train, save_dir=f"{dir_exp}/viz/{env_train}")
+    #     cfgs.append(cfg)
+    # txt_viz = experiment_utils.create_command_txt_from_configs(cfgs, viz_cfg_default,
+    #                                                            python_command='python viz_util.py')
+
+    # ------------------- TRAINING -------------------
     cfgs = []
-    for env_train in envs_train:
-        cfg = viz_cfg_default.copy()
-        cfg.update(env_id=env_train, save_dir=f"{dir_exp}/viz/{env_train}")
-        cfgs.append(cfg)
-    txt_viz = experiment_utils.create_command_txt_from_configs(cfgs, viz_cfg_default,
-                                                               python_command='python viz_util.py')
-
-    # ------------------- SYNTHETIC PRETRAINING: PPO -------------------
-    cfgs = []
-    cfg_shared = ppo_cfg_default.copy()
-    cfg_shared.update(n_seeds=1, agent_id=agent_id, run='train',
-                      save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=10000)  # 10000
-    for env_train in envs_train:
-        cfg = cfg_shared.copy()
-
-        cfg["env_id"] = env_train
-        cfg["load_dir"] = None
-        cfg["save_dir"] = f"{dir_exp}/pretrain/{env_train}"
-        cfgs.append(cfg)
-    txt_pretrain = experiment_utils.create_command_txt_from_configs(cfgs, ppo_cfg_default,
-                                                                    python_command='python run.py')
-
-    # ------------------- EXPERT TRAINING: PPO -------------------
-    cfgs = []
-    cfg_shared = ppo_cfg_default.copy()
-    cfg_shared.update(n_seeds=4, agent_id=agent_id, run='train',
-                      save_agent_params=True, n_envs=128, n_envs_batch=32, n_iters=1000)  # 1000
-    for env_test in envs_test:
-        cfg = cfg_shared.copy()
-
-        cfg["env_id"] = env_test
-        cfg["load_dir"] = None
-        cfg["save_dir"] = f"{dir_exp}/expert/{env_test}"
-        cfgs.append(cfg)
-    txt_expert = experiment_utils.create_command_txt_from_configs(cfgs, ppo_cfg_default, python_command='python run.py')
-
-    # ------------------- FINE-TUNE EVALUATION: ICL -------------------
-    # actually, this doesn't work yet because new envs have different obs shape and act space
-
-    # ------------------- FINE-TUNE EVALUATION: BC -------------------
-    cfgs = []
-    cfg_shared = bc_cfg_default.copy()
-    cfg_shared.update(n_seeds=32, agent_id=agent_id, run='train',
-                      save_agent_params=False, n_envs=4, n_envs_batch=4, n_iters=300,  # 300
-                      reset_layers='last', ft_layers='last')
-    for env_test in envs_test:
-        for env_train in envs_train:
+    cfg_shared = cfg_default.copy()
+    cfg_shared.update(n_iters=10000)
+    for time_perm in [True, False]:
+        for env_id in envs:
             cfg = cfg_shared.copy()
-            cfg["env_id"] = env_test
-            cfg["load_dir"] = f"{dir_exp}/pretrain/{env_train}"
-            cfg["load_dir_teacher"] = f"{dir_exp}/expert/{env_test}"
-            cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{env_train}"
+            cfg.update(
+                name=f"pretrain_{env_id}_time_perm_{time_perm}",
+                dataset_path=f'../data/temp/expert_data_{env_id}.pkl',
+                save_dir=f"{dir_exp}/pretrain/{env_id}_{time_perm}",
+                time_perm=time_perm
+            )
             cfgs.append(cfg)
+    txt_pretrain = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default,
+                                                                    python_command='python icl_bc.py')
 
-        # random agent - no train
-        cfg = cfg_shared.copy()
-        cfg["env_id"] = env_test
-        cfg["load_dir"] = None
-        cfg["load_dir_teacher"] = f"{dir_exp}/expert/{env_test}"
-        cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{'random_agent'}"
-        cfg["lr"] = 0.0
-        cfgs.append(cfg)
+    # ------------------- EVAL -------------------
+    cfgs = []
+    cfg_shared = cfg_default.copy()
+    cfg_shared.update(n_iters=1000)
+    for time_perm in [True, False]:
+        for env_id_train in envs:
+            for env_id_test in envs:
+                cfg = cfg_shared.copy()
+                cfg.update(
+                    name=f"train_{env_id_train}_test_{env_id_test}_time_perm_{time_perm}",
+                    dataset_path=f'../data/temp/expert_data_{env_id_test}.pkl',
+                    load_dir=f"{dir_exp}/pretrain/{env_id_train}_{time_perm}",
+                    save_dir=f"{dir_exp}/eval/{env_id_train}/{env_id_test}_{time_perm}",
+                    time_perm=time_perm
+                )
+                cfgs.append(cfg)
+    txt_eval = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default,
+                                                                python_command='python icl_bc.py')
 
-        # random agent - train
-        cfg = cfg_shared.copy()
-        cfg["env_id"] = env_test
-        cfg["load_dir"] = None
-        cfg["load_dir_teacher"] = f"{dir_exp}/expert/{env_test}"
-        cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{'train_random'}"
-        cfgs.append(cfg)
-    txt_eval = experiment_utils.create_command_txt_from_configs(cfgs, bc_cfg_default, python_command='python run_bc.py')
+    # ------------------- FINE-TUNE EVAL: BC -------------------
+    # cfgs = []
+    # cfg_shared = bc_cfg_default.copy()
+    # cfg_shared.update(n_seeds=32, agent_id=agent_id, run='train',
+    #                   save_agent_params=False, n_envs=4, n_envs_batch=4, n_iters=300,  # 300
+    #                   reset_layers='last', ft_layers='last')
+    # for env_test in envs_test:
+    #     for env_train in envs_train:
+    #         cfg = cfg_shared.copy()
+    #         cfg["env_id"] = env_test
+    #         cfg["load_dir"] = f"{dir_exp}/pretrain/{env_train}"
+    #         cfg["load_dir_teacher"] = f"{dir_exp}/expert/{env_test}"
+    #         cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{env_train}"
+    #         cfgs.append(cfg)
+    #
+    #     # random agent - no train
+    #     cfg = cfg_shared.copy()
+    #     cfg["env_id"] = env_test
+    #     cfg["load_dir"] = None
+    #     cfg["load_dir_teacher"] = f"{dir_exp}/expert/{env_test}"
+    #     cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{'random_agent'}"
+    #     cfg["lr"] = 0.0
+    #     cfgs.append(cfg)
+    #
+    #     # random agent - train
+    #     cfg = cfg_shared.copy()
+    #     cfg["env_id"] = env_test
+    #     cfg["load_dir"] = None
+    #     cfg["load_dir_teacher"] = f"{dir_exp}/expert/{env_test}"
+    #     cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{'train_random'}"
+    #     cfgs.append(cfg)
+    # txt_eval = experiment_utils.create_command_txt_from_configs(cfgs, bc_cfg_default, python_command='python run_bc.py')
 
     txt_pretrain = change_to_n_gpus(txt_pretrain, n_gpus)
-    txt_expert = change_to_n_gpus(txt_expert, n_gpus)
     txt_eval = change_to_n_gpus(txt_eval, n_gpus)
-    # txt = f"{txt_header}\n{txt_viz}\n{txt_pretrain}\n{txt_expert}\n{txt_eval}"
-    txt = f"{txt_header}\n\n{txt_pretrain}\n{txt_expert}\n{txt_eval}"
+    txt = f"{txt_header}\n\n{txt_pretrain}\n{txt_eval}"
     return txt
 
 
 if __name__ == '__main__':
     with open("experiment.sh", "w") as f:
-        f.write(experiment("../data/exp_01_17/", 6))
+        f.write(experiment("../data/exp_iclbc/", 6))
