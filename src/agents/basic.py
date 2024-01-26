@@ -1,7 +1,7 @@
 import flax.linen as nn
 import jax.numpy as jnp
 import numpy as np
-from flax.linen.initializers import constant, orthogonal
+from flax.linen.initializers import constant, orthogonal, uniform
 
 from .util import Agent
 
@@ -65,6 +65,36 @@ class BasicAgentSeparate(Agent):
 
     def init_state(self, rng):
         return self.obs_embed.init_state(rng)
+
+
+class BigBasicAgentSeparate(Agent):
+    n_acts: int
+
+    activation: str = "relu"
+
+    def setup(self):
+        activation = getattr(nn, self.activation)
+        self.seq_pi = nn.Sequential([
+            nn.Dense(256, kernel_init=uniform(0.05)),
+            activation,
+            nn.Dense(256, kernel_init=uniform(0.05)),
+            activation,
+            nn.Dense(self.n_acts, kernel_init=uniform(0.001)),
+        ])
+        self.seq_critic = nn.Sequential([
+            nn.Dense(256, kernel_init=uniform(0.05)),
+            activation,
+            nn.Dense(256, kernel_init=uniform(0.05)),
+            activation,
+            nn.Dense(1, kernel_init=uniform(0.05)),
+        ])
+
+    def __call__(self, state, x):  # state.shape: (...), x.shape: (T, ...)
+        logits, val = self.seq_pi(x), self.seq_critic(x)  # (T, A) and (T, 1)
+        return state, (logits, val[..., 0])
+
+    def init_state(self, rng):
+        return None
 
 
 class RandomAgent(Agent):

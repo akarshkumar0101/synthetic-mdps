@@ -302,6 +302,7 @@ class ObsNormRand(MyGymnaxWrapper):
         obs = buffer['obs']
         self.mean = obs.mean(axis=(0, 1))
         self.std = obs.std(axis=(0, 1))
+        print(buffer['rew'].mean())
 
     def reset_env(self, key, params):
         obs, state = self._env.reset_env(key, params)
