@@ -1,5 +1,6 @@
 import experiment_utils
 import icl_bc
+import icl_gen
 
 """
 Pretraining Tasks:
@@ -155,6 +156,97 @@ def experiment(dir_exp, n_gpus):
     return txt
 
 
+def exp_generate_data(dir_exp, n_gpus):
+    cfg_default = vars(icl_gen.parse_args())
+    print(cfg_default)
+
+    envs_synthetic = [
+        "name=csmdp;d_state=2;d_obs=4;n_acts=4;delta=T;trans=linear;rew=goal;tl=64",
+        "name=csmdp;d_state=2;d_obs=4;n_acts=4;delta=T;trans=linear;rew=linear;tl=64",
+    ]
+
+    envs_classic = [
+        "name=CartPole-v1",
+        "name=Acrobot-v1",
+        "name=MountainCar-v0",
+        "name=DiscretePendulum-v1",
+    ]
+
+    envs_minatar = [
+        "name=Asterix-MinAtar",
+        "name=Breakout-MinAtar",
+        "name=Freeway-MinAtar",
+        "name=SpaceInvaders-MinAtar",
+    ]
+
+    # ------------------- SYNTHETIC -------------------
+    cfgs = []
+    for env_id in envs_synthetic:
+        cfg = cfg_default.copy()
+        cfg.update(
+            env_id=env_id,
+            agent_id="small",
+            n_seeds_seq=16,
+            n_seeds_par=16,
+            n_iters_train=100,
+            n_iters_eval=1,
+            lr=3e-4,
+            save_dir=f"{dir_exp}/datasets/{env_id}/",
+        )
+        cfgs.append(cfg)
+    txt_syn = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen.py')
+
+    # ------------------- CLASSIC -------------------
+    cfgs = []
+    for env_id in envs_classic:
+        cfg = cfg_default.copy()
+        cfg.update(
+            env_id=env_id,
+            agent_id="classic",
+            n_seeds_seq=1,
+            n_seeds_par=1,
+            n_iters_train=2000,
+            n_iters_eval=300,
+            lr=3e-4,
+            best_of_n_experts=10,
+            save_dir=f"{dir_exp}/datasets/{env_id}/",
+        )
+        cfgs.append(cfg)
+    txt_cla = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen.py')
+
+    # ------------------- MINATAR -------------------
+    cfgs = []
+    for env_id in envs_minatar:
+        cfg = cfg_default.copy()
+        cfg.update(
+            env_id=env_id,
+            agent_id="minatar",
+            n_seeds_seq=1,
+            n_seeds_par=1,
+            n_envs=64,
+            n_envs_batch=8,
+            n_updates=32,
+            gamma=.999,
+            n_iters_train=2000,
+            n_iters_eval=20,
+            lr=1e-3,
+            best_of_n_experts=10,
+            save_dir=f"{dir_exp}/datasets/{env_id}/",
+        )
+        cfgs.append(cfg)
+    txt_ma = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen.py')
+
+    txt_syn = change_to_n_gpus(txt_syn, n_gpus)
+    txt_cla = change_to_n_gpus(txt_cla, n_gpus)
+    txt_ma = change_to_n_gpus(txt_ma, n_gpus)
+
+    txt = f"{txt_header}\n\n{txt_syn}\n{txt_cla}\n{txt_ma}"
+    return txt
+
+
 if __name__ == '__main__':
+    # with open("experiment.sh", "w") as f:
+    #     f.write(experiment("../data/exp_iclbc/", 6))
+
     with open("experiment.sh", "w") as f:
-        f.write(experiment("../data/exp_iclbc/", 6))
+        f.write(exp_generate_data("../data/exp_iclbc/", 6))

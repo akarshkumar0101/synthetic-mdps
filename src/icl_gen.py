@@ -1,22 +1,25 @@
 import argparse
+import os
 import pickle
 from functools import partial
 
 import gymnax
 import jax
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from einops import rearrange
 from jax.random import split
 from tqdm.auto import tqdm
 
 import util
-from agents.basic import BasicAgentSeparate, BigBasicAgentSeparate
-from agents.util import DenseObsEmbed
+from agents import DenseObsEmbed
+from agents.basic import BigBasicAgentSeparate, BasicAgentSeparate
 from algos.ppo_dr import PPO
 from mdps import csmdp
 from mdps import smdp
+from mdps.natural_mdps import DiscretePendulum
 from mdps.wrappers import LogWrapper
-from mdps.wrappers_mine import TimeLimit, ObsNormRand, FlattenObservationWrapper
+from mdps.wrappers_mine import TimeLimit, FlattenObservationWrapper
 
 # parser = argparse.ArgumentParser()
 # parser.add_argument("--env_id", type=str, default="CartPole-v1")
@@ -135,9 +138,9 @@ from mdps.wrappers_mine import TimeLimit, ObsNormRand, FlattenObservationWrapper
 #
 #     rng = jax.random.PRNGKey(0)
 #     rets, dataset = [], []
-#     for _ in tqdm(range(6)):
+#     for _ in tqdm(range(4*4)):
 #         rng, _rng = split(rng)
-#         retsi, dataseti = jax.jit(jax.vmap(get_dataset))(split(rng, 64))
+#         retsi, dataseti = jax.jit(jax.vmap(get_dataset))(split(rng, 16))
 #         rets.append(retsi)
 #         dataset.append(dataseti)
 #     rets = util.tree_stack(rets)
@@ -149,6 +152,8 @@ from mdps.wrappers_mine import TimeLimit, ObsNormRand, FlattenObservationWrapper
 #     plt.ylabel('Return')
 #     plt.xlabel('Training Iteration')
 #     plt.show()
+#
+#
 #
 #     print(jax.tree_map(lambda x: x.shape, dataset))
 #     with open(f'../data/temp/expert_data_{"synthetic"}.pkl', 'wb') as f:
@@ -166,7 +171,7 @@ parser.add_argument("--n_seeds_seq", type=int, default=1)  # sequential seeds
 parser.add_argument("--n_seeds_par", type=int, default=1)  # parallel seeds
 
 parser.add_argument("--n_iters_train", type=int, default=20)
-parser.add_argument("--n_iters_eval", type=int, default=10)  # sequential envs
+parser.add_argument("--n_iters_eval", type=int, default=1)  # sequential envs
 # ppo args
 parser.add_argument("--n_envs", type=int, default=4)  # parallel envs
 parser.add_argument("--n_steps", type=int, default=128)
@@ -181,11 +186,19 @@ parser.add_argument("--gamma", type=float, default=0.99)
 parser.add_argument("--gae_lambda", type=float, default=0.95)
 
 
+def parse_args(*args, **kwargs):
+    return parser.parse_args(*args, **kwargs)
+
+
 def create_env(env_id):
     env_cfg = dict([sub.split('=') for sub in env_id.split(';')])
 
     if env_cfg['name'] in gymnax.registered_envs:
         env, env_params = gymnax.make(env_cfg['name'])
+        env.sample_params = lambda rng: env_params
+    elif env_cfg['name'] == 'DiscretePendulum-v1':
+        env = DiscretePendulum()
+        env_params = env.default_params
         env.sample_params = lambda rng: env_params
     elif env_cfg['name'] == 'csmdp':
         d_state, d_obs, n_acts = int(env_cfg['d_state']), int(env_cfg['d_obs']), int(env_cfg['n_acts'])
@@ -220,9 +233,16 @@ def main(args):
     env = create_env(args.env_id)
     n_acts = env.action_space(None).n
 
-    # ObsEmbed = partial(DenseObsEmbed, d_embd=(32 if args.agent_id == 'small' else 128))
-    # agent = BasicAgentSeparate(ObsEmbed, n_acts)
-    agent = BigBasicAgentSeparate(n_acts)
+    if args.agent_id == 'small':
+        ObsEmbed = partial(DenseObsEmbed, d_embd=32)
+        agent = BasicAgentSeparate(ObsEmbed, 4)
+    elif args.agent_id == 'classic':
+        ObsEmbed = partial(DenseObsEmbed, d_embd=128)
+        agent = BasicAgentSeparate(ObsEmbed, n_acts)
+    elif args.agent_id == 'minatar':
+        agent = BigBasicAgentSeparate(n_acts)
+    else:
+        raise NotImplementedError
 
     def get_dataset_for_env_params(rng):
         rng, _rng = split(rng)
@@ -240,7 +260,6 @@ def main(args):
         carry = init_agent_env_vmap(split(_rng, args.best_of_n_experts))
         carry, buffer = jax.lax.scan(ppo_step_vmap, carry, xs=None, length=args.n_iters_train)
         rets_train = buffer['info']['returned_episode_returns']  # N S T E
-        a = rets_train
         rets_train = rets_train.mean(axis=(-1, -2))
         idx_best_expert = rets_train[-1].argmax()
         rets_train = rets_train[:, idx_best_expert]
@@ -254,49 +273,61 @@ def main(args):
         dataset = jax.tree_map(lambda x: rearrange(x, 'N T E ... -> (N E) T ...'), dataset)
         # print(jax.tree_map(lambda x: x.shape, dataset))
         # print(rets_eval.shape)
-        return dataset, rets_train, rets_eval, None
+        return dataset, rets_train, rets_eval
 
     rng = jax.random.PRNGKey(0)
     data = []
     for _ in tqdm(range(args.n_seeds_seq)):
         rng, _rng = split(rng)
-        dataset, rets_train, rets_eval, a = jax.jit(jax.vmap(get_dataset_for_env_params))(split(rng, args.n_seeds_par))
+        dataset, rets_train, rets_eval = jax.jit(jax.vmap(get_dataset_for_env_params))(split(rng, args.n_seeds_par))
         data.append((dataset, rets_train, rets_eval))
     data = util.tree_stack(data)
     data = jax.tree_map(lambda x: rearrange(x, "S1 S2 ... -> (S1 S2) ..."), data)
     dataset, rets_train, rets_eval = data  # (S E T ...), (S N), (S )
     print(jax.tree_map(lambda x: x.shape, (dataset, rets_train, rets_eval)))
 
-    plt.plot(rets_train.mean(axis=0), label='mean')
-    n_seeds = args.n_seeds_seq * args.n_seeds_par
-    plt.title(f'Training Curve for \n {env_id} \n({n_seeds} seeds, best of {args.best_of_n_experts} experts)')
-
-    plt.ylabel('Return')
-    plt.xlabel('Training Iteration')
-    # plt.title(f'Final eval mean: {rets_eval.mean():6.3f}')
-    plt.text(0.5, -0.2, f'Final eval mean: {rets_eval.mean():6.3f} +- {rets_eval.std(): 6.3f}', fontsize=30, color='r',
-             transform=plt.gca().transAxes, horizontalalignment='center', verticalalignment='center')
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
-    # a = a[0] # (n_iters_train, n_experts, T, E)
-    # a = rearrange(a, 'N S T E -> S E (N T)')
-    # a = a[2]
-    # plt.imshow(a)
-    # plt.show()
+    dataset = jax.tree_map(lambda x: rearrange(x, 'S E T ... -> (S E) T ...'), dataset)
 
     if args.save_dir is not None:
-        with open(f'../data/temp/expert_data_{"synthetic"}.pkl', 'wb') as f:
+        os.makedirs(args.save_dir, exist_ok=True)
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(jnp.arange(args.n_iters_train) * (args.n_envs * args.n_steps), rets_train.mean(axis=0), label='mean')
+        n_seeds = args.n_seeds_seq * args.n_seeds_par
+        plt.title(f'Training Curve for \n {args.env_id} \n({n_seeds} seeds, best of {args.best_of_n_experts} experts)')
+
+        plt.ylabel('Return')
+        plt.xlabel('Env Steps (Training)')
+        # plt.title(f'Final eval mean: {rets_eval.mean():6.3f}')
+        plt.text(0.5, -0.2, f'Final eval mean: {rets_eval.mean():6.3f}', fontsize=30, color='r',
+                 transform=plt.gca().transAxes, horizontalalignment='center', verticalalignment='center')
+        plt.legend()
+        plt.tight_layout()
+        # plt.show()
+
+        plt.savefig(f'{args.save_dir}/training_curve.png', dpi=300)
+
+        with open(f'{args.save_dir}/dataset.pkl', 'wb') as f:
             pickle.dump(dataset, f)
 
 
 if __name__ == '__main__':
+    main(parser.parse_args())
+
+    # env_id = "name=csmdp;d_state=2;d_obs=4;n_acts=4;delta=T;trans=linear;rew=goal;tl=64"
+    # main(parser.parse_args(
+    #     f"--env_id={env_id} --agent_id=small --n_seeds_seq=3 --n_seeds_par=3 --n_iters_train=100 --n_iters_eval=1 --lr=3e-4".split()))
+
     # env_id = "name=CartPole-v1"
     # env_id = "name=Acrobot-v1"
     # env_id = "name=MountainCar-v0"
+    # env_id = "name=DiscretePendulum-v1"
+    # main(parser.parse_args(
+    #     f"--env_id={env_id} --agent_id=classic --n_iters_train=1000 --n_iters_eval=100 --lr=3e-4 --best_of_n_experts=5".split()))
+    #
     # env_id = "name=Asterix-MinAtar"
     # env_id = "name=Breakout-MinAtar"
     # env_id = "name=Freeway-MinAtar"
-    env_id = "name=SpaceInvaders-MinAtar"
-    main(parser.parse_args(f"--env_id={env_id} --n_envs=64 --n_envs_batch=8 --n_updates=32 --gamma=.999 --n_iters_train=1000 --n_iters_eval=1 --lr=1e-3 --best_of_n_experts=5".split()))
+    # env_id = "name=SpaceInvaders-MinAtar"
+    # main(parser.parse_args(
+    #     f"--env_id={env_id} --agent_id=minatar --n_envs=64 --n_envs_batch=8 --n_updates=32 --gamma=.999 --n_iters_train=1000 --n_iters_eval=10 --lr=1e-3 --best_of_n_experts=5".split()))

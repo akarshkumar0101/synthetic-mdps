@@ -1,5 +1,7 @@
-import jax.numpy as jnp
 import gymnax
+import jax.numpy as jnp
+from gymnax.environments.classic_control import Pendulum
+from gymnax.environments.spaces import Discrete
 
 
 # TODO: rename to DenseCartPole
@@ -64,11 +66,21 @@ class Acrobot(gymnax.environments.Acrobot):
         return obs, state, rew, done, info
 
 
+class DiscretePendulum(Pendulum):
+    def step_env(self, key, state, action, params):
+        action = jnp.array([-2., -1., 0., 1., 2.])[action]
+        return super().step_env(key, state, action, params)
+
+    @property
+    def num_actions(self) -> int:
+        return 5
+
+    def action_space(self, params):
+        return Discrete(5)
+
+
 if __name__ == "__main__":
     import jax
-    import numpy as np
-    from jax.random import split
-    import matplotlib.pyplot as plt
     from src.mdps.wrappers_mine import collect_random_agent, GaussianObsReward
 
     rng = jax.random.PRNGKey(0)

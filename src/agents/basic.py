@@ -79,7 +79,7 @@ class BigBasicAgentSeparate(Agent):
             activation,
             nn.Dense(256, kernel_init=uniform(0.05)),
             activation,
-            nn.Dense(self.n_acts, kernel_init=uniform(0.001)),
+            nn.Dense(self.n_acts, kernel_init=uniform(1e-5)),
         ])
         self.seq_critic = nn.Sequential([
             nn.Dense(256, kernel_init=uniform(0.05)),
