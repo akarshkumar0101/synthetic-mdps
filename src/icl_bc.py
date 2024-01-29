@@ -5,12 +5,16 @@ import pickle
 import jax
 import jax.numpy as jnp
 import optax
+import wandb
 from flax.training.train_state import TrainState
+from jax import config as jax_config
 from jax.random import split
 from tqdm.auto import tqdm
 
-import wandb
+import util
 from agents.regular_transformer import Transformer
+
+jax_config.update("jax_debug_nans", True)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--entity", type=str, default=None)
@@ -21,6 +25,7 @@ parser.add_argument("--name", type=str, default=None)
 parser.add_argument("--dataset_path", type=str, default=None)
 parser.add_argument("--load_dir", type=str, default=None)
 parser.add_argument("--save_dir", type=str, default=None)
+parser.add_argument("--save_agent", type=lambda x: x == "True", default=False)
 
 parser.add_argument("--n_iters", type=int, default=10000)
 parser.add_argument("--n_augs", type=int, default=int(1e9))
@@ -34,7 +39,12 @@ parser.add_argument("--clip_grad_norm", type=float, default=1.)
 
 
 def parse_args(*args, **kwargs):
-    return parser.parse_args(*args, **kwargs)
+    args = parser.parse_args(*args, **kwargs)
+    # set all "none" to None
+    for k, v in vars(args).items():
+        if v == "None":
+            setattr(args, k, None)
+    return args
 
 
 def calc_entropy_stable(logits, axis=-1):
@@ -45,18 +55,19 @@ def calc_entropy_stable(logits, axis=-1):
 
 
 def main(args):
+    print(args)
     run = wandb.init(entity=args.entity, project=args.project, name=args.name, config=args)
 
     with open(args.dataset_path, 'rb') as f:
         dataset = pickle.load(f)  # D T ...
-    dataset['obs'] = (dataset['obs'] - dataset['obs'].mean(axis=(0, 1))) / dataset['obs'].std(axis=(0, 1))
+    dataset['obs'] = (dataset['obs'] - dataset['obs'].mean(axis=(0, 1))) / (dataset['obs'].std(axis=(0, 1)) + 1e-5)
     print('Dataset shape: ', jax.tree_map(lambda x: x.shape, dataset))
 
     ds_size, T, d_obs = dataset['obs'].shape
     n_acts = dataset['act'].max() + 1
 
-    d_obs_uni = 16
-    n_acts_uni = 4
+    d_obs_uni = 64
+    n_acts_uni = 8
     assert n_acts <= n_acts_uni
     n_acts_extra = n_acts_uni - n_acts
 
@@ -131,6 +142,7 @@ def main(args):
 
     do_iter = jax.jit(do_iter)
 
+    metrics = []
     pbar = tqdm(range(args.n_iters))
     for i_iter in pbar:
         if args.curriculum == 'linear_log':
@@ -138,28 +150,33 @@ def main(args):
         else:
             n_augs = args.n_augs
 
-        rng, train_state, metrics = do_iter(rng, train_state, n_augs)
-        pbar.set_postfix(loss_ce=metrics['ce'].mean())
+        rng, train_state, metrics_i = do_iter(rng, train_state, n_augs)
+        metrics.append(metrics_i)
+        pbar.set_postfix(loss_ce=metrics_i['ce'].mean())
 
         if i_iter % max(1, args.n_iters // 1000) == 0:
             wandb_data = dict(n_augs=n_augs,
-                              tar_acc=metrics['tar_acc'].mean(),
-                              tar_entr=metrics['tar_entr'].mean(), tar_ppl=metrics['tar_ppl'].mean())
+                              tar_acc=metrics_i['tar_acc'].mean(),
+                              tar_entr=metrics_i['tar_entr'].mean(), tar_ppl=metrics_i['tar_ppl'].mean())
             for k in ['ce', 'kldiv', 'entr', 'ppl', 'acc']:
-                wandb_data[f"{k}"] = metrics[k].mean()
-                wandb_data[f"{k}_first"] = metrics[k][0]
-                wandb_data[f"{k}_last"] = metrics[k][-1]
+                wandb_data[f"{k}"] = metrics_i[k].mean()
+                wandb_data[f"{k}_first"] = metrics_i[k][0]
+                wandb_data[f"{k}_last"] = metrics_i[k][-1]
             if i_iter % max(1, args.n_iters // 10) == 0:
                 for k in ['kldiv', 'acc', 'ppl']:
-                    x = jnp.stack([jnp.arange(T), metrics[k]], axis=-1)  # (T, 2)
+                    x = jnp.stack([jnp.arange(T), metrics_i[k]], axis=-1)  # (T, 2)
                     table = wandb.Table(data=x.tolist(), columns=['token_pos', 'val'])
                     wandb_data[f"{k}_vs_ctx"] = wandb.plot.line(table, 'token_pos', 'val', title=f'{k} vs token_pos')
             wandb.log(wandb_data, step=i_iter)
+    metrics = util.tree_stack(metrics)
 
     if args.save_dir is not None:
         os.makedirs(f"{args.save_dir}/", exist_ok=True)
-        with open(f"{args.save_dir}/agent_params.pkl", 'wb') as f:
-            pickle.dump(train_state.params, f)
+        with open(f"{args.save_dir}/metrics.pkl", 'wb') as f:
+            pickle.dump(metrics, f)
+        if args.save_agent:
+            with open(f"{args.save_dir}/agent_params.pkl", 'wb') as f:
+                pickle.dump(train_state.params, f)
 
     wandb.finish()
 

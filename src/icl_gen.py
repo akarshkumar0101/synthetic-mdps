@@ -230,6 +230,7 @@ def create_env(env_id):
 
 
 def main(args):
+    print(args)
     env = create_env(args.env_id)
     n_acts = env.action_space(None).n
 

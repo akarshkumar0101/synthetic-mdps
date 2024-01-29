@@ -42,31 +42,38 @@ txt_header = "\n".join(["#!/bin/bash",
                         "cd /data/vision/phillipi/akumar01/synthetic-mdps/src", "\n" * 3])
 
 
-def experiment(dir_exp, n_gpus):
-    agent_id = "obs_embed=dense;name=linear_transformer;tl=256"
+def exp_iclbc(dir_exp, n_gpus):
+    # envs_train = [
+    #     "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=linear;rew=linear;mrl=4x64",
+    #     "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=linear;rew=goal;mrl=4x64",
+    #     # "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=mlp;rew=linear;mrl=4x64",
+    #     # "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=mlp;rew=goal;mrl=4x64",
+    #     # "name=csmdp;d_state=4;d_obs=4;n_acts=2;delta=T;trans=linear;rew=linear;mrl=4x64",
+    #     # "name=csmdp;d_state=4;d_obs=4;n_acts=2;delta=T;trans=linear;rew=goal;mrl=4x64",
+    # ]
+    # envs_test = [
+    #     "name=CartPole-v1;tl=256",
+    #     # "name=CartPole-v1;tl=500",
+    #     # "name=Acrobot-v1;tl=500",
+    #     # "name=MountainCar-v0;tl=500",
+    #     # "name=Asterix-MinAtar;tl=500",
+    #     # "name=Breakout-MinAtar;tl=500",
+    #     # "name=Freeway-MinAtar;tl=500",
+    #     # "name=SpaceInvaders-MinAtar;tl=500",
+    # ]
     envs_train = [
-        "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=linear;rew=linear;mrl=4x64",
-        "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=linear;rew=goal;mrl=4x64",
-        "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=mlp;rew=linear;mrl=4x64",
-        "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=mlp;rew=goal;mrl=4x64",
-        "name=csmdp;d_state=4;d_obs=4;n_acts=2;delta=T;trans=linear;rew=linear;mrl=4x64",
-        "name=csmdp;d_state=4;d_obs=4;n_acts=2;delta=T;trans=linear;rew=goal;mrl=4x64",
+        "name=csmdp;d_state=2;d_obs=4;n_acts=4;delta=T;trans=linear;rew=goal;tl=64",
+        "name=csmdp;d_state=2;d_obs=4;n_acts=4;delta=T;trans=linear;rew=linear;tl=64",
     ]
     envs_test = [
-        "name=CartPole-v1;tl=256",
-        # "name=CartPole-v1;tl=500",
-        # "name=Acrobot-v1;tl=500",
-        # "name=MountainCar-v0;tl=500",
-        # "name=Asterix-MinAtar;tl=500",
-        # "name=Breakout-MinAtar;tl=500",
-        # "name=Freeway-MinAtar;tl=500",
-        # "name=SpaceInvaders-MinAtar;tl=500",
-    ]
-
-    envs = [
-        "CartPole-v1",
-        "Acrobot-v1",
-        "synthetic"
+        "name=CartPole-v1",
+        "name=Acrobot-v1",
+        "name=MountainCar-v0",
+        "name=DiscretePendulum-v1",
+        "name=Asterix-MinAtar",
+        "name=Breakout-MinAtar",
+        "name=Freeway-MinAtar",
+        "name=SpaceInvaders-MinAtar",
     ]
 
     cfg_default = vars(icl_bc.parse_args())
@@ -81,78 +88,43 @@ def experiment(dir_exp, n_gpus):
     # txt_viz = experiment_utils.create_command_txt_from_configs(cfgs, viz_cfg_default,
     #                                                            python_command='python viz_util.py')
 
-    # ------------------- TRAINING -------------------
+    # ------------------- TRAIN -------------------
     cfgs = []
-    cfg_shared = cfg_default.copy()
-    cfg_shared.update(n_iters=10000)
-    for time_perm in [True, False]:
-        for env_id in envs:
-            cfg = cfg_shared.copy()
+    for env_id_train in envs_train:
+        cfg = cfg_default.copy()
+        cfg.update(
+            name=f"pretrain_{env_id_train}",
+            n_iters=2000,
+            dataset_path=f'{dir_exp}/datasets/{env_id_train}/dataset.pkl',
+            save_dir=f"{dir_exp}/train/{env_id_train}",
+            time_perm=False,
+            save_agent=True,
+        )
+        cfgs.append(cfg)
+    txt_train = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_bc.py')
+
+    # ------------------- TEST -------------------
+    cfgs = []
+    for env_id_test in envs_test:
+        for env_id_train in [*envs_train, None]:
+            cfg = cfg_default.copy()
             cfg.update(
-                name=f"pretrain_{env_id}_time_perm_{time_perm}",
-                dataset_path=f'../data/temp/expert_data_{env_id}.pkl',
-                save_dir=f"{dir_exp}/pretrain/{env_id}_{time_perm}",
-                time_perm=time_perm
+                name=f"train_{env_id_train}_test_{env_id_test}",
+                n_iters=1000,
+                dataset_path=f'{dir_exp}/datasets/{env_id_test}/dataset.pkl',
+                load_dir=f"{dir_exp}/train/{env_id_train}" if env_id_train is not None else None,
+                save_dir=f"{dir_exp}/test/{env_id_test}/{env_id_train}",
+                time_perm=False
             )
+            if env_id_train is not None:
+                cfg.update()
+
             cfgs.append(cfg)
-    txt_pretrain = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default,
-                                                                    python_command='python icl_bc.py')
+    txt_test = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_bc.py')
 
-    # ------------------- EVAL -------------------
-    cfgs = []
-    cfg_shared = cfg_default.copy()
-    cfg_shared.update(n_iters=1000)
-    for time_perm in [True, False]:
-        for env_id_train in envs:
-            for env_id_test in envs:
-                cfg = cfg_shared.copy()
-                cfg.update(
-                    name=f"train_{env_id_train}_test_{env_id_test}_time_perm_{time_perm}",
-                    dataset_path=f'../data/temp/expert_data_{env_id_test}.pkl',
-                    load_dir=f"{dir_exp}/pretrain/{env_id_train}_{time_perm}",
-                    save_dir=f"{dir_exp}/eval/{env_id_train}/{env_id_test}_{time_perm}",
-                    time_perm=time_perm
-                )
-                cfgs.append(cfg)
-    txt_eval = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default,
-                                                                python_command='python icl_bc.py')
-
-    # ------------------- FINE-TUNE EVAL: BC -------------------
-    # cfgs = []
-    # cfg_shared = bc_cfg_default.copy()
-    # cfg_shared.update(n_seeds=32, agent_id=agent_id, run='train',
-    #                   save_agent_params=False, n_envs=4, n_envs_batch=4, n_iters=300,  # 300
-    #                   reset_layers='last', ft_layers='last')
-    # for env_test in envs_test:
-    #     for env_train in envs_train:
-    #         cfg = cfg_shared.copy()
-    #         cfg["env_id"] = env_test
-    #         cfg["load_dir"] = f"{dir_exp}/pretrain/{env_train}"
-    #         cfg["load_dir_teacher"] = f"{dir_exp}/expert/{env_test}"
-    #         cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{env_train}"
-    #         cfgs.append(cfg)
-    #
-    #     # random agent - no train
-    #     cfg = cfg_shared.copy()
-    #     cfg["env_id"] = env_test
-    #     cfg["load_dir"] = None
-    #     cfg["load_dir_teacher"] = f"{dir_exp}/expert/{env_test}"
-    #     cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{'random_agent'}"
-    #     cfg["lr"] = 0.0
-    #     cfgs.append(cfg)
-    #
-    #     # random agent - train
-    #     cfg = cfg_shared.copy()
-    #     cfg["env_id"] = env_test
-    #     cfg["load_dir"] = None
-    #     cfg["load_dir_teacher"] = f"{dir_exp}/expert/{env_test}"
-    #     cfg["save_dir"] = f"{dir_exp}/test/{env_test}/{'train_random'}"
-    #     cfgs.append(cfg)
-    # txt_eval = experiment_utils.create_command_txt_from_configs(cfgs, bc_cfg_default, python_command='python run_bc.py')
-
-    txt_pretrain = change_to_n_gpus(txt_pretrain, n_gpus)
-    txt_eval = change_to_n_gpus(txt_eval, n_gpus)
-    txt = f"{txt_header}\n\n{txt_pretrain}\n{txt_eval}"
+    txt_train = change_to_n_gpus(txt_train, n_gpus)
+    txt_test = change_to_n_gpus(txt_test, n_gpus)
+    txt = f"{txt_header}\n\n{txt_train}\n{txt_test}"
     return txt
 
 
@@ -246,7 +218,7 @@ def exp_generate_data(dir_exp, n_gpus):
 
 if __name__ == '__main__':
     # with open("experiment.sh", "w") as f:
-    #     f.write(experiment("../data/exp_iclbc/", 6))
+    #     f.write(exp_generate_data("../data/exp_iclbc/", 6))
 
     with open("experiment.sh", "w") as f:
-        f.write(exp_generate_data("../data/exp_iclbc/", 6))
+        f.write(exp_iclbc("../data/exp_iclbc/", 6))
