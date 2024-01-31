@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 from flax import linen as nn
 
@@ -80,10 +81,10 @@ class BCTransformer(nn.Module):
         self.actor = nn.Dense(features=self.n_acts, kernel_init=nn.initializers.orthogonal(0.01))  # T, A
 
     def __call__(self, obs, act):  # obs: (T, O), # act: (T, )
-        act = jnp.concatenate([jnp.zeros_like(act[:1]), act[:-1]])
+        act_p = jnp.concatenate([jnp.zeros_like(act[:1]), act[:-1]], axis=0)
 
         x_obs = self.embed_obs(obs)  # (T, D)
-        x_act = self.embed_act(act)  # (T, D)
+        x_act = self.embed_act(act_p)  # (T, D)
         x_time = self.embed_time(jnp.arange(self.n_steps))  # (T, D)
         x = x_obs + x_act + x_time
 
@@ -94,7 +95,7 @@ class BCTransformer(nn.Module):
         return logits
 
 
-class WorldModelingTransformer(nn.Module):
+class WMTransformer(nn.Module):
     n_acts: int
     n_layers: int
     n_heads: int
@@ -109,7 +110,7 @@ class WorldModelingTransformer(nn.Module):
 
         self.blocks = [Block(n_heads=self.n_heads) for _ in range(self.n_layers)]
         self.ln = nn.LayerNorm()
-        self.actor = nn.Dense(features=self.d_obs, kernel_init=nn.initializers.orthogonal(0.01))  # T, A
+        self.lin_out = nn.Dense(features=self.d_obs, kernel_init=nn.initializers.orthogonal(0.01))  # T, A
 
     def __call__(self, obs, act):  # obs: (T, O), # act: (T, )
         x_obs = self.embed_obs(obs)  # (T, D)
@@ -120,5 +121,12 @@ class WorldModelingTransformer(nn.Module):
         for block in self.blocks:
             x = block(x)
         x = self.ln(x)
-        obs_pred = self.actor(x)  # (T, A)
+        obs_pred = self.lin_out(x)  # (T, A)
         return obs_pred
+
+
+def calc_entropy_stable(logits, axis=-1):
+    logits = jax.nn.log_softmax(logits, axis=axis)
+    probs = jnp.exp(logits)
+    logits = jnp.where(probs == 0, 0., logits)  # replace -inf with 0
+    return -(probs * logits).sum(axis=axis)

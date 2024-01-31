@@ -5,14 +5,13 @@ import pickle
 import jax
 import jax.numpy as jnp
 import optax
-import wandb
 from flax.training.train_state import TrainState
 from jax import config as jax_config
 from jax.random import split
 from tqdm.auto import tqdm
 
 import util
-from agents.regular_transformer import Transformer
+from agents.regular_transformer import BCTransformer, WMTransformer
 
 jax_config.update("jax_debug_nans", True)
 
@@ -37,6 +36,8 @@ parser.add_argument("--bs", type=int, default=256)
 parser.add_argument("--lr", type=float, default=2.5e-4)
 parser.add_argument("--clip_grad_norm", type=float, default=1.)
 
+parser.add_argument("--obj", type=str, default="bc")  # bc or wm
+
 
 def parse_args(*args, **kwargs):
     args = parser.parse_args(*args, **kwargs)
@@ -56,7 +57,7 @@ def calc_entropy_stable(logits, axis=-1):
 
 def main(args):
     print(args)
-    run = wandb.init(entity=args.entity, project=args.project, name=args.name, config=args)
+    # run = wandb.init(entity=args.entity, project=args.project, name=args.name, config=args)
 
     with open(args.dataset_path, 'rb') as f:
         dataset = pickle.load(f)  # D T ...
@@ -99,7 +100,13 @@ def main(args):
 
     rng = jax.random.PRNGKey(0)
 
-    agent = Transformer(n_acts=n_acts_uni, n_layers=4, n_heads=4, d_embd=64, n_steps=T)
+    if args.obj == 'bc':
+        agent = BCTransformer(n_acts=n_acts_uni, n_layers=4, n_heads=4, d_embd=64, n_steps=T)
+    elif args.obj == 'wm':
+        agent = WMTransformer(n_acts=n_acts_uni, n_layers=4, n_heads=4, d_embd=64, n_steps=T, d_obs=d_obs_uni)
+    else:
+        raise NotImplementedError
+
     rng, _rng = split(rng)
     if args.load_dir is not None:
         with open(f"{args.load_dir}/agent_params.pkl", 'rb') as f:
@@ -112,9 +119,8 @@ def main(args):
     tx = optax.chain(optax.clip_by_global_norm(args.clip_grad_norm), optax.adam(args.lr, eps=1e-8))
     train_state = TrainState.create(apply_fn=agent.apply, params=agent_params, tx=tx)
 
-    def loss_fn(agent_params, batch):
-        logits, _ = jax.vmap(agent.apply, in_axes=(None, 0, 0))(agent_params, batch['obs'], batch['act'])
-
+    def loss_fn_bc(agent_params, batch):
+        logits = jax.vmap(agent.apply, in_axes=(None, 0, 0))(agent_params, batch['obs'], batch['act'])
         # ce_label = optax.softmax_cross_entropy_with_integer_labels(logits, batch['act'])
         ce = optax.softmax_cross_entropy(jax.nn.log_softmax(logits), jax.nn.softmax(batch['logits'])).mean(axis=0)
         kldiv = optax.kl_divergence(jax.nn.log_softmax(logits), jax.nn.softmax(batch['logits'])).mean(axis=0)
@@ -124,9 +130,19 @@ def main(args):
         tar_ppl = jnp.exp(tar_entr)
         acc = jnp.mean(batch['act'] == logits.argmax(axis=-1), axis=0)
         tar_acc = jnp.mean(batch['act'] == batch['logits'].argmax(axis=-1), axis=0)
-        metrics = dict(ce=ce, kldiv=kldiv, entr=entr, ppl=ppl,
+        metrics = dict(loss=ce.mean(), ce=ce, kldiv=kldiv, entr=entr, ppl=ppl,
                        tar_entr=tar_entr, tar_ppl=tar_ppl, acc=acc, tar_acc=tar_acc)
         return ce.mean(), metrics
+
+    def loss_fn_wm(agent_params, batch):
+        obs_pred = jax.vmap(agent.apply, in_axes=(None, 0, 0))(agent_params, batch['obs'], batch['act'])
+        obs = batch['obs']  # B T O
+        obs_n = jnp.concatenate([obs[:, 1:], obs[:, :1]], axis=1)  # B T O
+        l2 = optax.l2_loss(obs_pred, obs_n).mean(axis=(0, -1))  # T
+        metrics = dict(loss=l2.mean(), l2=l2)
+        return l2.mean(), metrics
+
+    loss_fn = {'bc': loss_fn_bc, 'wm': loss_fn_wm}[args.obj]
 
     def do_iter(rng, train_state, n_augs):
         rng, _rng = split(rng)
@@ -152,22 +168,22 @@ def main(args):
 
         rng, train_state, metrics_i = do_iter(rng, train_state, n_augs)
         metrics.append(metrics_i)
-        pbar.set_postfix(loss_ce=metrics_i['ce'].mean())
+        pbar.set_postfix(loss=metrics_i['loss'].item())
 
-        if i_iter % max(1, args.n_iters // 1000) == 0:
-            wandb_data = dict(n_augs=n_augs,
-                              tar_acc=metrics_i['tar_acc'].mean(),
-                              tar_entr=metrics_i['tar_entr'].mean(), tar_ppl=metrics_i['tar_ppl'].mean())
-            for k in ['ce', 'kldiv', 'entr', 'ppl', 'acc']:
-                wandb_data[f"{k}"] = metrics_i[k].mean()
-                wandb_data[f"{k}_first"] = metrics_i[k][0]
-                wandb_data[f"{k}_last"] = metrics_i[k][-1]
-            if i_iter % max(1, args.n_iters // 10) == 0:
-                for k in ['kldiv', 'acc', 'ppl']:
-                    x = jnp.stack([jnp.arange(T), metrics_i[k]], axis=-1)  # (T, 2)
-                    table = wandb.Table(data=x.tolist(), columns=['token_pos', 'val'])
-                    wandb_data[f"{k}_vs_ctx"] = wandb.plot.line(table, 'token_pos', 'val', title=f'{k} vs token_pos')
-            wandb.log(wandb_data, step=i_iter)
+        # if i_iter % max(1, args.n_iters // 1000) == 0:
+        #     wandb_data = dict(n_augs=n_augs,
+        #                       tar_acc=metrics_i['tar_acc'].mean(),
+        #                       tar_entr=metrics_i['tar_entr'].mean(), tar_ppl=metrics_i['tar_ppl'].mean())
+        #     for k in ['ce', 'kldiv', 'entr', 'ppl', 'acc']:
+        #         wandb_data[f"{k}"] = metrics_i[k].mean()
+        #         wandb_data[f"{k}_first"] = metrics_i[k][0]
+        #         wandb_data[f"{k}_last"] = metrics_i[k][-1]
+        #     if i_iter % max(1, args.n_iters // 10) == 0:
+        #         for k in ['kldiv', 'acc', 'ppl']:
+        #             x = jnp.stack([jnp.arange(T), metrics_i[k]], axis=-1)  # (T, 2)
+        #             table = wandb.Table(data=x.tolist(), columns=['token_pos', 'val'])
+        #             wandb_data[f"{k}_vs_ctx"] = wandb.plot.line(table, 'token_pos', 'val', title=f'{k} vs token_pos')
+        #     wandb.log(wandb_data, step=i_iter)
     metrics = util.tree_stack(metrics)
 
     if args.save_dir is not None:
@@ -178,7 +194,7 @@ def main(args):
             with open(f"{args.save_dir}/agent_params.pkl", 'wb') as f:
                 pickle.dump(train_state.params, f)
 
-    wandb.finish()
+    # wandb.finish()
 
 
 if __name__ == '__main__':

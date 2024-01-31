@@ -1,116 +1,134 @@
-import flax.linen as nn
 import jax.numpy as jnp
 import jax.random
 from einops import rearrange
+from jax.random import split
 
+from .random_net import RandomMLP, create_random_net
 from .smdp import Discrete, Box
 
 
-class Init(nn.Module):
-    d_state: int
+def clip_state(state):
+    # d_state = state.shape[-1]
+    # max_norm = 2. + jnp.sqrt(d_state)
+    #
+    # norm = jnp.linalg.norm(state, axis=-1, keepdims=True)
+    # clip_norm = norm.clip(min=None, max=max_norm)
+    # state = state / norm * clip_norm
+    # return state
+    return state.clip(min=-3., max=3.)
 
-    def setup(self):
-        init = lambda rng, shape, dtype=None: jax.random.uniform(rng, shape, dtype=dtype, minval=-1., maxval=1.)
-        self.state_start = self.param('state_start', init, (self.d_state,))
 
-    def __call__(self, rng):
-        state = self.state_start
+class Init:
+    def __init__(self, d_state, std=0.):
+        self.d_state, self.std = d_state, std
+
+    def sample_params(self, rng):
+        mean = jax.random.normal(rng, (self.d_state,))
+        params = dict(mean=mean)
+        return params
+
+    def __call__(self, rng, params):
+        noise = jax.random.normal(rng, (self.d_state,))
+        state = params['mean'] + noise * self.std
+        state = clip_state(state)
         return state
 
     def state_space(self, params):
-        return Box(-1, 1, (self.d_state,), dtype=jnp.float32)
+        return Box(-3, 3, (self.d_state,), dtype=jnp.float32)
 
 
-class LinearTransition(nn.Module):
-    d_state: int
-    n_acts: int
-    delta: True
+class DeltaTransition:
+    def __init__(self, d_state, n_acts, n_layers, d_hidden, activation, locality=1e-1, std=0.):
+        self.d_state, self.n_acts = d_state, n_acts
+        self.n_layers, self.d_hidden, self.activation = n_layers, d_hidden, activation
+        self.locality, self.std = locality, std
 
-    def setup(self):
-        self.net = nn.Dense(self.d_state * self.n_acts)
+        self.net = RandomMLP(n_layers=self.n_layers, d_hidden=self.d_hidden,
+                             d_out=self.d_state * self.n_acts, activation=self.activation)
 
-    def __call__(self, rng, state, action):
-        state_n = rearrange(self.net(state), "(a d) -> a d", a=self.n_acts)[action]
-        if self.delta:
-            state_n = state + .15 * state_n
-        state_n = jnp.clip(state_n, -1., 1.)
-        return state_n
+    def sample_params(self, rng):
+        rng, _rng = split(rng)
+        x = jax.random.normal(_rng, (32, self.d_state))
+        rng, _rng = split(rng)
+        params = create_random_net(self.net, _rng, x)
+        return params
 
-    def action_space(self, params):
-        return Discrete(self.n_acts)
-
-
-class MLPTransition(nn.Module):
-    d_state: int
-    n_acts: int
-    delta: True
-
-    def setup(self):
-        self.net = nn.Sequential([
-            nn.Dense(self.d_state * self.n_acts,
-                     kernel_init=jax.nn.initializers.orthogonal(),
-                     bias_init=jax.nn.initializers.normal(1e-1)),
-            nn.tanh,
-            nn.Dense(self.d_state * self.n_acts,
-                     kernel_init=jax.nn.initializers.orthogonal(),
-                     bias_init=jax.nn.initializers.normal(1e-1)),
-            nn.tanh,
-            nn.Dense(self.d_state * self.n_acts),
-        ])
-
-    def __call__(self, rng, state, action):
-        state_n = rearrange(self.net(state), "(a d) -> a d", a=self.n_acts)[action]
-        if self.delta:
-            state_n = state + .15 * state_n
-        state_n = jnp.clip(state_n, -1., 1.)
-        return state_n
+    def __call__(self, rng, state, action, params):
+        mean = self.net.apply(params, state)
+        mean = rearrange(mean, "(a d) -> a d", a=self.n_acts)[action]
+        noise = jax.random.normal(rng, (self.d_state,))
+        delta = mean * self.locality + noise * self.locality * self.std
+        state = state + delta
+        state = clip_state(state)
+        return state
 
     def action_space(self, params):
         return Discrete(self.n_acts)
 
 
-class LinearObservation(nn.Module):
-    d_state: int
-    d_obs: int
-    initializer: nn.initializers.Initializer = nn.initializers.normal(stddev=1.)
+class Observation:
+    def __init__(self, d_state, d_obs, n_layers, d_hidden, activation, std=0.):
+        self.d_state, self.d_obs = d_state, d_obs
+        self.n_layers, self.d_hidden, self.activation = n_layers, d_hidden, activation
+        self.std = std
 
-    def setup(self):
-        self.seq = nn.Dense(self.d_obs, use_bias=True, kernel_init=self.initializer, bias_init=self.initializer)
+        self.net = RandomMLP(n_layers=self.n_layers, d_hidden=self.d_hidden,
+                             d_out=self.d_obs, activation=self.activation)
 
-    def __call__(self, state):
-        return self.seq(state)
+    def sample_params(self, rng):
+        rng, _rng = split(rng)
+        x = jax.random.normal(_rng, (32, self.d_state))
+        rng, _rng = split(rng)
+        params = create_random_net(self.net, _rng, x)
+        return params
+
+    def __call__(self, rng, state, params):
+        mean = self.net.apply(params, state)
+        noise = jax.random.normal(rng, (self.d_obs,))
+        obs = mean + noise * self.std
+        return obs
 
     def observation_space(self, params):
-        return Box(-1, 1, (self.d_obs,), dtype=jnp.float32)
+        return Box(-3, 3, (self.d_obs,), dtype=jnp.float32)
 
 
-class LinearReward(nn.Module):
-    d_state: int
+class DenseReward:
+    def __init__(self, d_state, n_layers, d_hidden, activation, std=0.):
+        self.d_state = d_state
+        self.n_layers, self.d_hidden, self.activation = n_layers, d_hidden, activation
+        self.std = std
+        self.net = RandomMLP(n_layers=self.n_layers, d_hidden=self.d_hidden,
+                             d_out=1, activation=self.activation)
 
-    def setup(self):
-        ball_init = lambda rng, shape, dtype=None: jax.random.ball(rng, d=shape[0], dtype=dtype)
-        self.dir_goal = self.param('dir_goal', ball_init, (self.d_state,))
+    def sample_params(self, rng):
+        rng, _rng = split(rng)
+        x = jax.random.normal(_rng, (32, self.d_state))
+        rng, _rng = split(rng)
+        params = create_random_net(self.net, _rng, x)
+        return params
 
-    def __call__(self, state):
-        return jnp.dot(state, self.dir_goal)
+    def __call__(self, rng, state, params):
+        mean = self.net.apply(params, state)
+        noise = jax.random.normal(rng, (1,))
+        rew = mean + noise * self.std
+        return rew[..., 0]
 
-
-class GoalReward(nn.Module):
-    d_state: int
-    dist_thresh: float = None
-
-    def setup(self):
-        if self.dist_thresh is None:
-            # 4*(r**n)/2**n = .1
-            # 4*(r**n) = .1 * 2**n
-            # (r**n) = .1 * 2**n / 4
-            # r = (.1 * 2**n / 4)**(1/n)
-            # ensures ~10% of the state space is within the goal
-            self.r = (.1 * (2 ** self.d_state) / 4.) ** (1 / self.d_state)
-        bss_init = lambda rng, shape, dtype=None: jax.random.uniform(rng, shape, dtype=dtype, minval=-1., maxval=1.)
-        self.state_goal = self.param('state_goal', bss_init, (self.d_state,))
-
-    def __call__(self, state):
-        dist = jnp.linalg.norm(state - self.state_goal)
-        rew = (dist < self.r).astype(jnp.float32)
-        return rew
+# class GoalReward(nn.Module):
+#     d_state: int
+#     dist_thresh: float = None
+#
+#     def setup(self):
+#         if self.dist_thresh is None:
+#             # 4*(r**n)/2**n = .1
+#             # 4*(r**n) = .1 * 2**n
+#             # (r**n) = .1 * 2**n / 4
+#             # r = (.1 * 2**n / 4)**(1/n)
+#             # ensures ~10% of the state space is within the goal
+#             self.r = (.1 * (2 ** self.d_state) / 4.) ** (1 / self.d_state)
+#         bss_init = lambda rng, shape, dtype=None: jax.random.uniform(rng, shape, dtype=dtype, minval=-1., maxval=1.)
+#         self.state_goal = self.param('state_goal', bss_init, (self.d_state,))
+#
+#     def __call__(self, state):
+#         dist = jnp.linalg.norm(state - self.state_goal)
+#         rew = (dist < self.r).astype(jnp.float32)
+#         return rew

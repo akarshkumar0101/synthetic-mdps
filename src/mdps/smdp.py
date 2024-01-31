@@ -1,57 +1,48 @@
-import flax.linen as nn
 import jax
 from gymnax.environments import environment, spaces
+from jax.random import split
 
 
 class SyntheticMDP(environment.Environment):
     def __init__(self, model_init, model_trans, model_obs, model_rew, model_done):
         super().__init__()
         self.model_init = model_init  # rng -> state
-        self.model_trans = model_trans  # state, action, rng -> state
-        self.model_obs = model_obs  # state -> obs
-        self.model_rew = model_rew  # state -> R
-        self.model_done = model_done  # state -> done
+        self.model_trans = model_trans  # rng, state, action -> state
+        self.model_obs = model_obs  # rng, state -> obs
+        self.model_rew = model_rew  # rng, state -> R
+        self.model_done = model_done  # rng, state -> done
 
     def sample_params(self, rng):
         _rng_init, _rng_trans, _rng_obs, _rng_rew, _rng_done = jax.random.split(rng, 5)
-        params_init = self.model_init.init(_rng_init, rng)
-
-        state = self.model_init.apply(params_init, rng)
-        action = self.model_trans.action_space(None).sample(rng)
-
-        params_trans = self.model_trans.init(_rng_trans, rng, state, action)
-        params_obs = self.model_obs.init(_rng_obs, state)
-        params_rew = self.model_rew.init(_rng_rew, state)
-        params_done = self.model_done.init(_rng_done, state)
-        return dict(params_init=params_init, params_trans=params_trans,
-                    params_obs=params_obs, params_rew=params_rew, params_done=params_done)
+        init = self.model_init.sample_params(_rng_init)
+        trans = self.model_trans.sample_params(_rng_trans)
+        obs = self.model_obs.sample_params(_rng_obs)
+        rew = self.model_rew.sample_params(_rng_rew)
+        done = self.model_done.sample_params(_rng_done)
+        return dict(init=init, trans=trans, obs=obs, rew=rew, done=done)
 
     def reset_env(self, rng, params):
         """Performs resetting of environment."""
-        ks = ["params_init", "params_trans", "params_obs", "params_rew", "params_done"]
-        params_init, params_trans, params_obs, params_rew, params_done = [params[k] for k in ks]
-
-        state = self.model_init.apply(params_init, rng)
-        obs = self.model_obs.apply(params_obs, state)
+        _rng_init, _rng_obs = split(rng)
+        state = self.model_init(_rng_init, params['init'])
+        obs = self.model_obs(_rng_obs, state, params['obs'])
         return obs, state
 
     def step_env(self, rng, state, action, params):
         """Performs step transitions in the environment."""
-        ks = ["params_init", "params_trans", "params_obs", "params_rew", "params_done"]
-        params_init, params_trans, params_obs, params_rew, params_done = [params[k] for k in ks]
-
-        state = self.model_trans.apply(params_trans, rng, state, action)
-        obs = self.model_obs.apply(params_obs, state)
-        rew = self.model_rew.apply(params_rew, state)
-        done = self.model_done.apply(params_done, state)
+        _rng_trans, _rng_obs, _rng_rew, _rng_done = jax.random.split(rng, 4)
+        state = self.model_trans(_rng_trans, state, action, params['trans'])
+        obs = self.model_obs(_rng_obs, state, params['obs'])
+        rew = self.model_rew(_rng_rew, state, params['rew'])
+        done = self.model_done(_rng_done, state, params['done'])
         info = {}
         return obs, state, rew, done, info
 
-    def get_rew(self, state, params):
-        return self.model_rew.apply(params['params_rew'], state)
+    def get_rew(self, rng, state, params):
+        return self.model_rew(rng, state, params['rew'])
 
-    def is_done(self, state, params):
-        return self.model_done.apply(params['params_done'], state)
+    def is_done(self, rng, state, params):
+        return self.model_done(rng, state, params['done'])
 
     @property
     def name(self) -> str:
@@ -62,25 +53,35 @@ class SyntheticMDP(environment.Environment):
         return self.model_trans.action_space(None)
 
     def observation_space(self, params):
-        return self.model_obs.observation_space(params['params_obs'])
+        return self.model_obs.observation_space(params['obs'])
 
     def state_space(self, params):
-        return self.model_init.state_space(params['params_init'])
+        return self.model_init.state_space(params['init'])
+
+    def get_obs(self, state, params):
+        raise NotImplementedError
+
+    @property
+    def num_actions(self) -> int:
+        raise NotImplementedError
 
 
-class IdentityObs(nn.Module):
-    def setup(self):
-        pass
+class IdentityObs:
+    def sample_params(self, rng):
+        return None
 
-    def __call__(self, state):
+    def __call__(self, rng, state, params):
         return state
 
+    def observation_space(self, params):
+        return None
 
-class NeverDone(nn.Module):
-    def setup(self):
-        pass
 
-    def __call__(self, state):
+class NeverDone:
+    def sample_params(self, rng):
+        return None
+
+    def __call__(self, rng, state, params):
         return False
 
 

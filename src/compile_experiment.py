@@ -1,6 +1,15 @@
+import math
+import os
+
+import numpy as np
+
 import experiment_utils
 import icl_bc
 import icl_gen
+
+txt_header = "\n".join(["#!/bin/bash",
+                        "source /data/vision/phillipi/akumar01/.virtualenvs/synthetic-mdps/bin/activate",
+                        "cd /data/vision/phillipi/akumar01/synthetic-mdps/src", "\n" * 3])
 
 """
 Pretraining Tasks:
@@ -17,78 +26,53 @@ Transfer tasks:
 "name=acrobot;fobs=T;rpo=64;tl=128"
 """
 
+# def get_n_acts(env):
+#     config = dict([sub.split('=') for sub in env.split(';')])
+#     try:
+#         return int(config["n_acts"])
+#     except KeyError:
+#         return dict(gridenv=5, cartpole=2, mountaincar=3, acrobot=3)[config["name"]]
 
-def get_n_acts(env):
-    config = dict([sub.split('=') for sub in env.split(';')])
-    try:
-        return int(config["n_acts"])
-    except KeyError:
-        return dict(gridenv=5, cartpole=2, mountaincar=3, acrobot=3)[config["name"]]
+np.random.seed(0)
+envs_synthetic = []
+for i in range(128):
+    i_d, i_s, t_a, t_c, t_l, t_s, o_d, o_c, r_c = [np.random.randint(0, 5) for _ in range(9)]
+    env_id = f"name=csmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_c={t_c};t_l={t_l};t_s={t_s};o_d={o_d};o_c={o_c};r_c={r_c};tl=64"
+    envs_synthetic.append(env_id)
+
+envs_classic = [
+    "name=CartPole-v1",
+    "name=Acrobot-v1",
+    "name=MountainCar-v0",
+    "name=DiscretePendulum-v1",
+]
+
+envs_minatar = [
+    "name=Asterix-MinAtar",
+    "name=Breakout-MinAtar",
+    "name=Freeway-MinAtar",
+    "name=SpaceInvaders-MinAtar",
+]
+
+envs_train = envs_synthetic
+envs_test = envs_classic + envs_minatar
 
 
-def change_to_n_gpus(txt, n_gpus):
-    lines = [line for line in txt.split("\n") if line]
-    out = []
-    for i, line in enumerate(lines):
-        out.append(f'CUDA_VISIBLE_DEVICES={i % n_gpus} {line} &')
-        if i % n_gpus == n_gpus - 1 or i == len(lines) - 1:
-            out.append("wait")
-    out = "\n".join(out) + "\n"
-    return out
+# def change_to_n_gpus(txt, n_gpus):
+#     lines = [line for line in txt.split("\n") if line]
+#     out = []
+#     for i, line in enumerate(lines):
+#         out.append(f'CUDA_VISIBLE_DEVICES={i % n_gpus} {line} &')
+#         if i % n_gpus == n_gpus - 1 or i == len(lines) - 1:
+#             out.append("wait")
+#     out = "\n".join(out) + "\n"
+#     return out
 
 
-txt_header = "\n".join(["#!/bin/bash",
-                        "source /data/vision/phillipi/akumar01/.virtualenvs/synthetic-mdps/bin/activate",
-                        "cd /data/vision/phillipi/akumar01/synthetic-mdps/src", "\n" * 3])
-
-
-def exp_iclbc(dir_exp, n_gpus):
-    # envs_train = [
-    #     "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=linear;rew=linear;mrl=4x64",
-    #     "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=linear;rew=goal;mrl=4x64",
-    #     # "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=mlp;rew=linear;mrl=4x64",
-    #     # "name=csmdp;d_state=2;d_obs=4;n_acts=2;delta=T;trans=mlp;rew=goal;mrl=4x64",
-    #     # "name=csmdp;d_state=4;d_obs=4;n_acts=2;delta=T;trans=linear;rew=linear;mrl=4x64",
-    #     # "name=csmdp;d_state=4;d_obs=4;n_acts=2;delta=T;trans=linear;rew=goal;mrl=4x64",
-    # ]
-    # envs_test = [
-    #     "name=CartPole-v1;tl=256",
-    #     # "name=CartPole-v1;tl=500",
-    #     # "name=Acrobot-v1;tl=500",
-    #     # "name=MountainCar-v0;tl=500",
-    #     # "name=Asterix-MinAtar;tl=500",
-    #     # "name=Breakout-MinAtar;tl=500",
-    #     # "name=Freeway-MinAtar;tl=500",
-    #     # "name=SpaceInvaders-MinAtar;tl=500",
-    # ]
-    envs_train = [
-        "name=csmdp;d_state=2;d_obs=4;n_acts=4;delta=T;trans=linear;rew=goal;tl=64",
-        "name=csmdp;d_state=2;d_obs=4;n_acts=4;delta=T;trans=linear;rew=linear;tl=64",
-    ]
-    envs_test = [
-        "name=CartPole-v1",
-        "name=Acrobot-v1",
-        "name=MountainCar-v0",
-        "name=DiscretePendulum-v1",
-        "name=Asterix-MinAtar",
-        "name=Breakout-MinAtar",
-        "name=Freeway-MinAtar",
-        "name=SpaceInvaders-MinAtar",
-    ]
-
+def exp_train(dir_exp, obj="bc"):
     cfg_default = vars(icl_bc.parse_args())
-    print(cfg_default)
+    # print(cfg_default)
 
-    # ------------------- VIZ envs -------------------
-    # cfgs = []
-    # for env_train in envs_train:
-    #     cfg = viz_cfg_default.copy()
-    #     cfg.update(env_id=env_train, save_dir=f"{dir_exp}/viz/{env_train}")
-    #     cfgs.append(cfg)
-    # txt_viz = experiment_utils.create_command_txt_from_configs(cfgs, viz_cfg_default,
-    #                                                            python_command='python viz_util.py')
-
-    # ------------------- TRAIN -------------------
     cfgs = []
     for env_id_train in envs_train:
         cfg = cfg_default.copy()
@@ -96,60 +80,44 @@ def exp_iclbc(dir_exp, n_gpus):
             name=f"pretrain_{env_id_train}",
             n_iters=2000,
             dataset_path=f'{dir_exp}/datasets/{env_id_train}/dataset.pkl',
-            save_dir=f"{dir_exp}/train/{env_id_train}",
+            save_dir=f"{dir_exp}/train_{obj}/{env_id_train}",
             time_perm=False,
+            obj=obj,
             save_agent=True,
         )
         cfgs.append(cfg)
-    txt_train = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_bc.py')
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_bc.py')
+    return txt
 
-    # ------------------- TEST -------------------
+
+def exp_test(dir_exp, obj="bc"):
+    cfg_default = vars(icl_bc.parse_args())
+    # print(cfg_default)
+
     cfgs = []
     for env_id_test in envs_test:
         for env_id_train in [*envs_train, None]:
             cfg = cfg_default.copy()
             cfg.update(
                 name=f"train_{env_id_train}_test_{env_id_test}",
-                n_iters=1000,
+                n_iters=100,
                 dataset_path=f'{dir_exp}/datasets/{env_id_test}/dataset.pkl',
-                load_dir=f"{dir_exp}/train/{env_id_train}" if env_id_train is not None else None,
-                save_dir=f"{dir_exp}/test/{env_id_test}/{env_id_train}",
-                time_perm=False
+                load_dir=f"{dir_exp}/train_{obj}/{env_id_train}" if env_id_train is not None else None,
+                save_dir=f"{dir_exp}/test_{obj}/{env_id_test}/{env_id_train}",
+                time_perm=False,
+                obj=obj,
             )
             if env_id_train is not None:
                 cfg.update()
 
             cfgs.append(cfg)
-    txt_test = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_bc.py')
-
-    txt_train = change_to_n_gpus(txt_train, n_gpus)
-    txt_test = change_to_n_gpus(txt_test, n_gpus)
-    txt = f"{txt_header}\n\n{txt_train}\n{txt_test}"
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_bc.py')
     return txt
 
 
-def exp_generate_data(dir_exp, n_gpus):
+def exp_data(dir_exp):
     cfg_default = vars(icl_gen.parse_args())
     print(cfg_default)
-
-    envs_synthetic = [
-        "name=csmdp;d_state=2;d_obs=4;n_acts=4;delta=T;trans=linear;rew=goal;tl=64",
-        "name=csmdp;d_state=2;d_obs=4;n_acts=4;delta=T;trans=linear;rew=linear;tl=64",
-    ]
-
-    envs_classic = [
-        "name=CartPole-v1",
-        "name=Acrobot-v1",
-        "name=MountainCar-v0",
-        "name=DiscretePendulum-v1",
-    ]
-
-    envs_minatar = [
-        "name=Asterix-MinAtar",
-        "name=Breakout-MinAtar",
-        "name=Freeway-MinAtar",
-        "name=SpaceInvaders-MinAtar",
-    ]
 
     # ------------------- SYNTHETIC -------------------
     cfgs = []
@@ -177,10 +145,10 @@ def exp_generate_data(dir_exp, n_gpus):
             agent_id="classic",
             n_seeds_seq=1,
             n_seeds_par=1,
-            n_iters_train=2000,
+            n_iters_train=4000,
             n_iters_eval=300,
             lr=3e-4,
-            best_of_n_experts=10,
+            best_of_n_experts=20,
             save_dir=f"{dir_exp}/datasets/{env_id}/",
         )
         cfgs.append(cfg)
@@ -207,18 +175,46 @@ def exp_generate_data(dir_exp, n_gpus):
         )
         cfgs.append(cfg)
     txt_ma = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen.py')
+    return f"{txt_syn}\n{txt_cla}\n{txt_ma}"
 
-    txt_syn = change_to_n_gpus(txt_syn, n_gpus)
-    txt_cla = change_to_n_gpus(txt_cla, n_gpus)
-    txt_ma = change_to_n_gpus(txt_ma, n_gpus)
 
-    txt = f"{txt_header}\n\n{txt_syn}\n{txt_cla}\n{txt_ma}"
-    return txt
+def write_to_nodes_gpus(d, txt, n_nodes=1, n_gpus=1):
+    assert n_nodes > 0 and n_gpus > 0
+    lines = [line for line in txt.split("\n") if line]
+
+    txt_nodes = [txt_header for _ in range(n_nodes)]
+    for i in range(int(math.ceil(len(lines) / n_gpus))):
+        block = lines[i * n_gpus:(i + 1) * n_gpus]
+        block = [f'CUDA_VISIBLE_DEVICES={i} {line} &' for i, line in enumerate(block)]
+        block.append('wait')
+        block = "\n".join(block) + "\n"
+
+        i_node = i % n_nodes
+        txt_nodes[i_node] += block
+
+    for i_node, txt_node in enumerate(txt_nodes):
+        os.makedirs(f"{d}", exist_ok=True)
+        with open(f"{d}/{i_node}.sh", "w") as f:
+            f.write(txt_node)
 
 
 if __name__ == '__main__':
-    # with open("experiment.sh", "w") as f:
-    #     f.write(exp_generate_data("../data/exp_iclbc/", 6))
+    dir_exp = "../data/exp_icl/"
+    n_nodes, n_gpus = 4, 4
+    os.system("rm -rf ./experiment/")
+    os.makedirs("./experiment/", exist_ok=True)
 
-    with open("experiment.sh", "w") as f:
-        f.write(exp_iclbc("../data/exp_iclbc/", 6))
+    txt = exp_data(dir_exp)
+    write_to_nodes_gpus("./experiment/data/", txt, n_nodes, n_gpus)
+
+    txt = exp_train(dir_exp, obj="bc")
+    write_to_nodes_gpus("./experiment/train_bc/", txt, n_nodes, n_gpus)
+
+    txt = exp_test(dir_exp, obj="bc")
+    write_to_nodes_gpus("./experiment/test_bc/", txt, n_nodes, n_gpus)
+
+    txt = exp_train(dir_exp, obj="wm")
+    write_to_nodes_gpus("./experiment/train_wm/", txt, n_nodes, n_gpus)
+
+    txt = exp_test(dir_exp, obj="wm")
+    write_to_nodes_gpus("./experiment/test_wm/", txt, n_nodes, n_gpus)
