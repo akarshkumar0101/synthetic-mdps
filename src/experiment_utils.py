@@ -44,9 +44,14 @@ def create_arg_list(config):
     for key, val in config.items():
         key = f"--{key}"
         if isinstance(val, list):
-            arg_list.append(f'{key} {" ".join(val)}')
+            a = key
+            for v in val:
+                a = a + " " + f'"{v}"'
+            # arg_list.append(f'{key} {" ".join(["\"\"" for v in val])}')
+            arg_list.append(a)
         else:
-            if isinstance(val, str):  # if isinstance(val, str) and (" " in val or "=" in val or "[" in val or "]" in val):
+            if isinstance(val,
+                          str):  # if isinstance(val, str) and (" " in val or "=" in val or "[" in val or "]" in val):
                 arg_list.append(f'{key}="{val}"')
             else:
                 arg_list.append(f"{key}={val}")
@@ -56,7 +61,8 @@ def create_arg_list(config):
 def create_command_txt(arg_lists, python_command=None, out_file=None):
     n_coms, n_args = len(arg_lists), len(arg_lists[0])
     alens = [max([len(arg_lists[i_com][i_arg]) for i_com in range(n_coms)]) for i_arg in range(n_args)]
-    commands = [" ".join([arg_lists[i_com][i_arg].ljust(alens[i_arg]) for i_arg in range(n_args)]) for i_com in range(n_coms)]
+    commands = [" ".join([arg_lists[i_com][i_arg].ljust(alens[i_arg]) for i_arg in range(n_args)]) for i_com in
+                range(n_coms)]
     if python_command is not None:
         commands = [f"{python_command} {com}" for com in commands]
     command_txt = "\n".join(commands) + "\n"

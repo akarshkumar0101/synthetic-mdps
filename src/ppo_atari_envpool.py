@@ -1,5 +1,6 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_atari_envpoolpy
 import os
+import pickle
 import random
 import time
 from collections import deque
@@ -26,7 +27,7 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
-    track: bool = False
+    track: str = "False"
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "cleanRL"
     """the wandb's project name"""
@@ -78,6 +79,8 @@ class Args:
     """the mini-batch size (computed in runtime)"""
     num_iterations: int = 0
     """the number of iterations (computed in runtime)"""
+
+    save_dir: str = None
 
 
 class RecordEpisodeStatistics(gym.Wrapper):
@@ -146,7 +149,22 @@ class Agent(nn.Module):
         probs = Categorical(logits=logits)
         if action is None:
             action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy(), self.critic(hidden)
+        return action, probs.log_prob(action), probs.entropy(), self.critic(hidden), probs.logits
+
+
+class RandomCNN(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.seq = nn.Sequential(*[
+            nn.Conv2d(4, 32, 3, padding=1, stride=2),
+            nn.Conv2d(32, 32, 3, padding=1, stride=2),
+            nn.Conv2d(32, 32, 3, padding=1, stride=2),
+            nn.Flatten(),
+            nn.Linear(3872, 128),
+        ])
+
+    def forward(self, x):
+        return self.seq(x / 255.0)
 
 
 if __name__ == "__main__":
@@ -154,6 +172,7 @@ if __name__ == "__main__":
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
+    args.track = (args.track == 'True')
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
     if args.track:
         import wandb
@@ -206,6 +225,7 @@ if __name__ == "__main__":
     rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
     dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
     values = torch.zeros((args.num_steps, args.num_envs)).to(device)
+    logits = torch.zeros((args.num_steps, args.num_envs) + (envs.single_action_space.n,)).to(device)
     avg_returns = deque(maxlen=20)
 
     # TRY NOT TO MODIFY: start the game
@@ -228,10 +248,11 @@ if __name__ == "__main__":
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
-                action, logprob, _, value = agent.get_action_and_value(next_obs)
+                action, logprob, _, value, logits_i = agent.get_action_and_value(next_obs)
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
+            logits[step] = logits_i
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, next_done, info = envs.step(action.cpu().numpy())
@@ -279,7 +300,8 @@ if __name__ == "__main__":
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
 
-                _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
+                _, newlogprob, entropy, newvalue, _ = agent.get_action_and_value(b_obs[mb_inds],
+                                                                                 b_actions.long()[mb_inds])
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
 
@@ -339,6 +361,59 @@ if __name__ == "__main__":
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+
+    # -------------------- DATASET GENERATION --------------------
+    print('Generating dataset...')
+    args.num_steps = 128
+    args.num_iterations = 8192 // args.num_envs
+    rand_cnn = RandomCNN().to(device)
+    dataset = dict(obs=[], logits=[], act=[])
+    print(args.num_iterations)
+    for iteration in range(1, args.num_iterations + 1):
+        for step in range(0, args.num_steps):
+            global_step += args.num_envs
+            obs[step] = next_obs
+            dones[step] = next_done
+
+            # ALGO LOGIC: action logic
+            with torch.no_grad():
+                action, logprob, _, value, logits_i = agent.get_action_and_value(next_obs)
+                values[step] = value.flatten()
+            actions[step] = action
+            logprobs[step] = logprob
+            logits[step] = logits_i
+
+            # TRY NOT TO MODIFY: execute the game and log data.
+            next_obs, reward, next_done, info = envs.step(action.cpu().numpy())
+            rewards[step] = torch.tensor(reward).to(device).view(-1)
+            next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
+
+            for idx, d in enumerate(next_done):
+                if d and info["lives"][idx] == 0:
+                    print(f"global_step={global_step}, episodic_return={info['r'][idx]}")
+                    avg_returns.append(info["r"][idx])
+                    writer.add_scalar("charts/avg_episodic_return", np.average(avg_returns), global_step)
+                    writer.add_scalar("charts/episodic_return", info["r"][idx], global_step)
+                    writer.add_scalar("charts/episodic_length", info["l"][idx], global_step)
+
+        dobs = obs.reshape(args.num_steps * args.num_envs, *envs.single_observation_space.shape)
+        with torch.no_grad():
+            dobs = rand_cnn(dobs)
+        dobs = dobs.reshape(args.num_steps, args.num_envs, -1)
+        dobs = dobs.permute(1, 0, 2)
+        dlogits = logits.permute(1, 0, 2)
+        dact = actions.permute(1, 0)
+        dataset['obs'].append(dobs.cpu().numpy().astype(np.float32))
+        dataset['logits'].append(dlogits.cpu().numpy().astype(np.float32))
+        dataset['act'].append(dact.cpu().numpy().astype(int))
+    dataset['obs'] = np.concatenate(dataset['obs'], axis=0)
+    dataset['logits'] = np.concatenate(dataset['logits'], axis=0)
+    dataset['act'] = np.concatenate(dataset['act'], axis=0)
+
+    if args.save_dir is not None:
+        os.makedirs(args.save_dir, exist_ok=True)
+        with open(f"{args.save_dir}/dataset.pkl", "wb") as f:
+            pickle.dump(dataset, f)
 
     envs.close()
     writer.close()

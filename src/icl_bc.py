@@ -1,4 +1,5 @@
 import argparse
+import glob
 import os
 import pickle
 
@@ -21,7 +22,8 @@ parser.add_argument("--project", type=str, default="synthetic-mdps")
 parser.add_argument("--name", type=str, default=None)
 
 # parser.add_argument("--env_id", type=str, default="CartPole-v1")
-parser.add_argument("--dataset_path", type=str, default=None)
+parser.add_argument("--dataset_paths", type=str, nargs="+", default=[])
+parser.add_argument("--exclude_dataset_paths", type=str, nargs="+", default=[])
 parser.add_argument("--load_dir", type=str, default=None)
 parser.add_argument("--save_dir", type=str, default=None)
 parser.add_argument("--save_agent", type=lambda x: x == "True", default=False)
@@ -55,51 +57,92 @@ def calc_entropy_stable(logits, axis=-1):
     return -(probs * logits).sum(axis=axis)
 
 
-def main(args):
-    print(args)
-    # run = wandb.init(entity=args.entity, project=args.project, name=args.name, config=args)
+def preprocess_dataset(dataset, d_obs_uni, n_acts_uni):
+    assert 'obs' in dataset and 'logits' in dataset and 'act' in dataset
+    assert dataset['obs'].ndim == 3 and dataset['logits'].ndim == 3 and dataset['act'].ndim == 2
+    dataset = jax.tree_map(lambda x: jnp.asarray(x), dataset)  # convert to jax
 
-    with open(args.dataset_path, 'rb') as f:
-        dataset = pickle.load(f)  # D T ...
     dataset['obs'] = (dataset['obs'] - dataset['obs'].mean(axis=(0, 1))) / (dataset['obs'].std(axis=(0, 1)) + 1e-5)
-    print('Dataset shape: ', jax.tree_map(lambda x: x.shape, dataset))
-
     ds_size, T, d_obs = dataset['obs'].shape
     n_acts = dataset['act'].max() + 1
-
-    d_obs_uni = 64
-    n_acts_uni = 8
     assert n_acts <= n_acts_uni
     n_acts_extra = n_acts_uni - n_acts
 
-    def augment_instance(instance, task_id):
-        obs, logits, act = instance['obs'], instance['logits'], instance['act']
-        rng = jax.random.PRNGKey(task_id)
-        rng, _rng = split(rng)
-        obs_mat = jax.random.normal(_rng, (d_obs_uni, d_obs)) * (1 / d_obs)
-        rng, _rng = split(rng)
-        act_perm = jax.random.permutation(_rng, n_acts_uni)
+    rng = jax.random.PRNGKey(0)
+    obs_mat = jax.random.normal(rng, (d_obs_uni, d_obs)) * jnp.sqrt(1. / d_obs)
+    dataset['obs'] = dataset['obs'] @ obs_mat.T
+    logits_extra = jnp.full((ds_size, T, n_acts_extra), -jnp.inf)
+    dataset['logits'] = jnp.concatenate([dataset['logits'], logits_extra], axis=-1)
+
+    # dataset = jax.tree_map(lambda x: np.asarray(x), dataset)  # convert back to numpy # TODO: manage devices
+    return dataset
+
+
+def augment_batch(rng, batch, n_augs, do_time_perm=False):
+    bs, T, d_obs = batch['obs'].shape
+    _, _, n_acts = batch['logits'].shape
+
+    def augment_instance(instance, aug_id):
+        rng = jax.random.PRNGKey(aug_id)
+        _rng_obs, _rng_act, _rng_time = split(rng, 3)
+        obs_mat = jax.random.normal(_rng_obs, (d_obs, d_obs)) * jnp.sqrt(1. / d_obs)
+        act_perm = jax.random.permutation(_rng_act, n_acts)
         i_act_perm = jnp.zeros_like(act_perm)
-        i_act_perm = i_act_perm.at[act_perm].set(jnp.arange(n_acts_uni))
+        i_act_perm = i_act_perm.at[act_perm].set(jnp.arange(n_acts))
+        time_perm = jax.random.permutation(_rng_time, T) if do_time_perm else jnp.arange(T)
+        obs = (instance['obs'] @ obs_mat.T)[time_perm]
+        logits = (instance['logits'][:, i_act_perm])[time_perm]
+        act = (act_perm[instance['act']])[time_perm]
+        return dict(obs=obs, logits=logits, act=act)
 
+    rng, _rng = split(rng)
+    aug_ids = jax.random.randint(_rng, (bs,), minval=0, maxval=n_augs)
+    return jax.vmap(augment_instance)(batch, aug_ids)
+
+
+def sample_batch_from_dataset(rng, dataset, bs):
+    rng, _rng = split(rng)
+    idx = jax.random.randint(_rng, (bs,), minval=0, maxval=len(dataset['obs']))
+    batch = jax.tree_map(lambda x: x[idx], dataset)
+    return batch
+
+
+def sample_batch_from_datasets(rng, datasets, bs):
+    rng, _rng = split(rng)
+    i_ds = jax.random.randint(_rng, (bs,), minval=0, maxval=len(datasets))
+
+    batches = []
+    for i, ds in enumerate(datasets):
+        bs_ds = jnp.sum(i_ds == i).item()
         rng, _rng = split(rng)
-        if args.time_perm:
-            time_perm = jax.random.permutation(_rng, T)
-        else:
-            time_perm = jnp.arange(T)
+        i = jax.random.randint(_rng, (bs_ds,), minval=0, maxval=len(ds['obs']))
+        batch = jax.tree_map(lambda x: x[i], ds)
+        batches.append(batch)
+    batch = util.tree_cat(batches)
+    return batch
 
-        obs_aug = obs @ obs_mat.T
-        act_aug = act_perm[act]
 
-        logits_extra = jnp.full((T, n_acts_extra), -jnp.inf)
-        logits_aug = jnp.concatenate([logits, logits_extra], axis=-1)
-        logits_aug = logits_aug[:, i_act_perm]
+def main(args):
+    print(args)
+    # run = wandb.init(entity=args.entity, project=args.project, name=args.name, config=args)
+    d_obs_uni = 64
+    n_acts_uni = 8
+    T = 128
 
-        obs_aug, logits_aug, act_aug = obs_aug[time_perm], logits_aug[time_perm], act_aug[time_perm]
-        return dict(obs=obs_aug, logits=logits_aug, act=act_aug)
+    include_paths = [os.path.abspath(p) for i in args.dataset_paths for p in glob.glob(i)]
+    exclude_paths = [os.path.abspath(p) for i in args.exclude_dataset_paths for p in glob.glob(i)]
+    dataset_paths = sorted(set(include_paths) - set(exclude_paths))
+
+    datasets = []
+    for p in dataset_paths:
+        print(f"Loading dataset from {p}")
+        with open(p, 'rb') as f:
+            dataset = pickle.load(f)
+        dataset = preprocess_dataset(dataset, d_obs_uni=d_obs_uni, n_acts_uni=n_acts_uni)
+        print(f"Dataset shape: {jax.tree_map(lambda x: x.shape, dataset)}")
+        datasets.append(dataset)
 
     rng = jax.random.PRNGKey(0)
-
     if args.obj == 'bc':
         agent = BCTransformer(n_acts=n_acts_uni, n_layers=4, n_heads=4, d_embd=64, n_steps=T)
     elif args.obj == 'wm':
@@ -112,8 +155,9 @@ def main(args):
         with open(f"{args.load_dir}/agent_params.pkl", 'rb') as f:
             agent_params = pickle.load(f)
     else:
-        batch = {k: dataset[k][0] for k in ['obs', 'logits', 'act']}
-        batch = augment_instance(batch, 0)
+        batch = sample_batch_from_datasets(rng, datasets, 1)
+        batch = augment_batch(rng, batch, n_augs=1, do_time_perm=False)
+        batch = jax.tree_map(lambda x: x[0], batch)
         agent_params = agent.init(_rng, batch['obs'], batch['act'])
 
     tx = optax.chain(optax.clip_by_global_norm(args.clip_grad_norm), optax.adam(args.lr, eps=1e-8))
@@ -130,28 +174,25 @@ def main(args):
         tar_ppl = jnp.exp(tar_entr)
         acc = jnp.mean(batch['act'] == logits.argmax(axis=-1), axis=0)
         tar_acc = jnp.mean(batch['act'] == batch['logits'].argmax(axis=-1), axis=0)
-        metrics = dict(loss=ce.mean(), ce=ce, kldiv=kldiv, entr=entr, ppl=ppl,
+        loss = ce.mean()
+        metrics = dict(loss=loss, ce=ce, kldiv=kldiv, entr=entr, ppl=ppl,
                        tar_entr=tar_entr, tar_ppl=tar_ppl, acc=acc, tar_acc=tar_acc)
-        return ce.mean(), metrics
+        return loss, metrics
 
     def loss_fn_wm(agent_params, batch):
         obs_pred = jax.vmap(agent.apply, in_axes=(None, 0, 0))(agent_params, batch['obs'], batch['act'])
         obs = batch['obs']  # B T O
         obs_n = jnp.concatenate([obs[:, 1:], obs[:, :1]], axis=1)  # B T O
         l2 = optax.l2_loss(obs_pred, obs_n).mean(axis=(0, -1))  # T
-        metrics = dict(loss=l2.mean(), l2=l2)
-        return l2.mean(), metrics
+        loss = l2.mean()
+        metrics = dict(loss=loss, l2=l2)
+        return loss, metrics
 
     loss_fn = {'bc': loss_fn_bc, 'wm': loss_fn_wm}[args.obj]
 
-    def do_iter(rng, train_state, n_augs):
+    def do_iter(rng, train_state, batch, n_augs):
         rng, _rng = split(rng)
-        task_id = jax.random.randint(_rng, (args.bs,), minval=0, maxval=n_augs)
-        rng, _rng = split(rng)
-        idx = jax.random.randint(_rng, (args.bs,), minval=0, maxval=ds_size)
-        batch = jax.tree_map(lambda x: x[idx], dataset)
-        batch = jax.vmap(augment_instance)(batch, task_id)
-
+        batch = augment_batch(_rng, batch, n_augs=n_augs, do_time_perm=args.time_perm)
         (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(train_state.params, batch)
         train_state = train_state.apply_gradients(grads=grads)
         return rng, train_state, metrics
@@ -166,7 +207,9 @@ def main(args):
         else:
             n_augs = args.n_augs
 
-        rng, train_state, metrics_i = do_iter(rng, train_state, n_augs)
+        rng, _rng = split(rng)
+        batch = sample_batch_from_datasets(rng, datasets, args.bs)
+        rng, train_state, metrics_i = do_iter(rng, train_state, batch, n_augs)
         metrics.append(metrics_i)
         pbar.set_postfix(loss=metrics_i['loss'].item())
 
@@ -199,3 +242,4 @@ def main(args):
 
 if __name__ == '__main__':
     main(parse_args())
+# TODO: keep it mind that multiple dataset makes it much slower. I think its cause of cat operation

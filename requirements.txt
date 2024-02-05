@@ -18,7 +18,3 @@ brax
 matplotlib
 jupyter
 jupyterlab
-
-# for rendering
-pyglet==1.5.27
-
