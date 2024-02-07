@@ -41,7 +41,7 @@ Transfer tasks:
 
 np.random.seed(0)
 envs_synthetic = []
-for i in range(128):
+for i in range(32):
     i_d, i_s, t_a, t_c, t_l, t_s, o_d, o_c, r_c = [np.random.randint(0, 5) for _ in range(9)]
     env_id = f"name=csmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_c={t_c};t_l={t_l};t_s={t_s};o_d={o_d};o_c={o_c};r_c={r_c};tl=64"
     envs_synthetic.append(env_id)
@@ -61,7 +61,6 @@ envs_minatar = [
 ]
 
 envs_train = envs_synthetic
-envs_test = envs_classic + envs_minatar
 
 envs_procgen = ["bigfish", "bossfight", "caveflyer", "chaser", "climber", "coinrun", "dodgeball", "fruitbot", "heist",
                 "jumper", "leaper", "maze", "miner", "ninja", "plunder", "starpilot"]
@@ -74,6 +73,10 @@ envs_atari_57 = ["Alien", "Amidar", "Assault", "Asterix", "Asteroids", "Atlantis
                  "RoadRunner", "Robotank", "Seaquest", "Skiing", "Solaris", "SpaceInvaders", "StarGunner", "Surround",
                  "Tennis", "TimePilot", "Tutankham", "UpNDown", "Venture", "VideoPinball", "WizardOfWor", "YarsRevenge",
                  "Zaxxon", ]
+envs_atari_16 = ["Pong", "Breakout", "SpaceInvaders", "Asterix", "Amidar", "Freeway", "Boxing", "Jamesbond",
+                 "Riverraid", "Hero", "Krull", "Tutankham", "Kangaroo", "MsPacman", "Defender", "BeamRider"]
+
+envs_test = envs_classic + envs_minatar + envs_atari_16 + envs_procgen
 
 dataset_dirs = {}
 for env_id in envs_synthetic:
@@ -156,7 +159,7 @@ def exp_test(dir_exp, obj="bc"):
     cfgs = []
     for env_id_test in envs_test:
         # ---------------- TRAINED ON TRAIN/TEST ----------------
-        for env_id_train in [*envs_train, *envs_test]:
+        for env_id_train in [*envs_train, env_id_test]:
             cfg = cfg_default.copy()
             cfg.update(
                 dataset_path=f'{dir_exp}/datasets/{dataset_dirs[env_id_test]}/dataset.pkl',
@@ -199,10 +202,8 @@ def exp_test(dir_exp, obj="bc"):
     return txt
 
 
-def exp_data(dir_exp):
+def exp_data_syn(dir_exp):
     cfg_default = vars(icl_gen.parse_args())
-    # print(cfg_default)
-
     # ------------------- SYNTHETIC -------------------
     cfgs = []
     for env_id in envs_synthetic:
@@ -218,8 +219,12 @@ def exp_data(dir_exp):
             save_dir=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/",
         )
         cfgs.append(cfg)
-    txt_syn = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen.py')
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen.py')
+    return txt
 
+
+def exp_data_classic(dir_exp):
+    cfg_default = vars(icl_gen.parse_args())
     # ------------------- CLASSIC -------------------
     cfgs = []
     for env_id in envs_classic:
@@ -230,14 +235,18 @@ def exp_data(dir_exp):
             n_seeds_seq=1,
             n_seeds_par=1,
             n_iters_train=4000,
-            n_iters_eval=300,
+            n_iters_eval=1024,
             lr=3e-4,
             best_of_n_experts=20,
             save_dir=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/",
         )
         cfgs.append(cfg)
-    txt_cla = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen.py')
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen.py')
+    return txt
 
+
+def exp_data_minatar(dir_exp):
+    cfg_default = vars(icl_gen.parse_args())
     # ------------------- MINATAR -------------------
     cfgs = []
     for env_id in envs_minatar:
@@ -252,21 +261,21 @@ def exp_data(dir_exp):
             n_updates=32,
             gamma=.999,
             n_iters_train=2000,
-            n_iters_eval=20,
+            n_iters_eval=64,
             lr=1e-3,
             best_of_n_experts=10,
             save_dir=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/",
         )
         cfgs.append(cfg)
-    txt_ma = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen.py')
-    return f"{txt_syn}\n{txt_cla}\n{txt_ma}"
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen.py')
+    return txt
 
 
 def exp_data_atari(dir_exp):
     cfg_default = dict(track=False, env_id="none", save_dir="none")
     # ------------------- ATARI -------------------
     cfgs = []
-    for env_id in envs_atari_57:
+    for env_id in envs_atari_16:
         cfg = cfg_default.copy()
         cfg.update(
             track=True,
@@ -297,7 +306,7 @@ def exp_data_procgen(dir_exp):
     return txt_procgen
 
 
-def write_to_nodes_gpus(d, txt, n_nodes=1, n_gpus=1, txt_header=txt_header_main):
+def write_to_nodes_gpus(file, txt, n_nodes=1, n_gpus=1, txt_header=txt_header_main):
     assert n_nodes > 0 and n_gpus > 0
     lines = [line for line in txt.split("\n") if line]
 
@@ -311,11 +320,13 @@ def write_to_nodes_gpus(d, txt, n_nodes=1, n_gpus=1, txt_header=txt_header_main)
         i_node = i % n_nodes
         txt_nodes[i_node] += block
 
-    os.makedirs(f"{d}", exist_ok=True)
-    with open(f"{d}/all.sh", "w") as f:
+    basename = os.path.basename(file).split(".")[0]
+    dirname = os.path.dirname(file)
+    with open(f"{file}", "w") as f:
         f.write(txt)
+    os.makedirs(f"{dirname}/{basename}", exist_ok=True)
     for i_node, txt_node in enumerate(txt_nodes):
-        with open(f"{d}/{i_node}.sh", "w") as f:
+        with open(f"{dirname}/{basename}/{i_node}.sh", "w") as f:
             f.write(txt_node)
 
 
@@ -325,23 +336,25 @@ if __name__ == '__main__':
     os.system("rm -rf ./experiment/")
     os.makedirs("./experiment/", exist_ok=True)
 
-    txt = exp_data(dir_exp)
-    write_to_nodes_gpus("./experiment/data/", txt, n_nodes, n_gpus)
-
-    # txt = exp_data_atari(dir_exp)
-    # write_to_nodes_gpus("./experiment/data_atari/", txt, n_nodes, n_gpus, txt_header=txt_header_atari)
-    #
-    # txt = exp_data_procgen(dir_exp)
-    # write_to_nodes_gpus("./experiment/data_procgen/", txt, n_nodes, n_gpus, txt_header=txt_header_procgen)
+    txt = exp_data_syn(dir_exp)
+    write_to_nodes_gpus("./experiment/data_syn.sh", txt, n_nodes, n_gpus)
+    txt = exp_data_classic(dir_exp)
+    write_to_nodes_gpus("./experiment/data_classic.sh", txt, n_nodes, n_gpus)
+    txt = exp_data_minatar(dir_exp)
+    write_to_nodes_gpus("./experiment/data_minatar.sh", txt, n_nodes, n_gpus)
+    txt = exp_data_atari(dir_exp)
+    write_to_nodes_gpus("./experiment/data_atari.sh", txt, n_nodes, n_gpus, txt_header=txt_header_atari)
+    txt = exp_data_procgen(dir_exp)
+    write_to_nodes_gpus("./experiment/data_procgen.sh", txt, n_nodes, n_gpus, txt_header=txt_header_procgen)
 
     txt = exp_train(dir_exp, obj="bc")
-    write_to_nodes_gpus("./experiment/train_bc/", txt, n_nodes, n_gpus)
+    write_to_nodes_gpus("./experiment/train_bc.sh", txt, n_nodes, n_gpus)
 
     txt = exp_test(dir_exp, obj="bc")
-    write_to_nodes_gpus("./experiment/test_bc/", txt, n_nodes, n_gpus)
+    write_to_nodes_gpus("./experiment/test_bc.sh", txt, n_nodes, n_gpus)
 
     # txt = exp_train(dir_exp, obj="wm")
-    # write_to_nodes_gpus("./experiment/train_wm/", txt, n_nodes, n_gpus)
+    # write_to_nodes_gpus("./experiment/train_wm.sh", txt, n_nodes, n_gpus)
     #
     # txt = exp_test(dir_exp, obj="wm")
-    # write_to_nodes_gpus("./experiment/test_wm/", txt, n_nodes, n_gpus)
+    # write_to_nodes_gpus("./experiment/test_wm.sh", txt, n_nodes, n_gpus)

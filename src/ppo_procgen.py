@@ -167,7 +167,7 @@ class RandomCNN(nn.Module):
             nn.Conv2d(32, 32, 3, padding=1, stride=2),
             nn.Conv2d(32, 32, 3, padding=1, stride=2),
             nn.Flatten(),
-            nn.Linear(2048, 128),
+            nn.Linear(2048, 64),
         ])
 
     def forward(self, x):
@@ -367,8 +367,12 @@ if __name__ == "__main__":
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
     # -------------------- DATASET GENERATION --------------------
-    args.num_steps = 128
-    args.num_iterations = 8192 // args.num_envs
+    print("Generating dataset...")
+    T = 128
+    args.num_steps = T
+    obs, actions, logprobs, rewards = obs[:T], actions[:T], logprobs[:T], rewards[:T]
+    dones, values, logits = dones[:T], values[:T], logits[:T]
+    args.num_iterations = 4096 // args.num_envs
     rand_cnn = RandomCNN().to(device)
     dataset = dict(obs=[], logits=[], act=[])
     for iteration in range(1, args.num_iterations + 1):

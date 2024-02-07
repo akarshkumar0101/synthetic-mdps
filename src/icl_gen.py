@@ -6,6 +6,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+import numpy as np
 from einops import rearrange
 from jax.random import split
 from tqdm.auto import tqdm
@@ -127,6 +128,9 @@ def main(args):
         plt.tight_layout()
         plt.savefig(f'{args.save_dir}/training_curve.png', dpi=300)
 
+        dataset = jax.tree_map(lambda x: np.array(x), dataset)
+        rets_train = np.array(rets_train)
+        rets_eval = np.array(rets_eval)
         with open(f'{args.save_dir}/dataset.pkl', 'wb') as f:
             pickle.dump(dataset, f)
         with open(f'{args.save_dir}/rets_train.pkl', 'wb') as f:

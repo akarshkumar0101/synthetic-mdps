@@ -5,6 +5,7 @@ import pickle
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 from flax.training.train_state import TrainState
 from jax import config as jax_config
@@ -74,7 +75,7 @@ def preprocess_dataset(dataset, d_obs_uni, n_acts_uni):
     logits_extra = jnp.full((ds_size, T, n_acts_extra), -jnp.inf)
     dataset['logits'] = jnp.concatenate([dataset['logits'], logits_extra], axis=-1)
 
-    # dataset = jax.tree_map(lambda x: np.asarray(x), dataset)  # convert back to numpy # TODO: manage devices
+    dataset = jax.tree_map(lambda x: np.asarray(x), dataset)  # convert back to numpy # TODO: manage devices
     return dataset
 
 
@@ -126,12 +127,14 @@ def main(args):
     print(args)
     # run = wandb.init(entity=args.entity, project=args.project, name=args.name, config=args)
     d_obs_uni = 64
-    n_acts_uni = 8
+    n_acts_uni = 18
     T = 128
 
     include_paths = [os.path.abspath(p) for i in args.dataset_paths for p in glob.glob(i)]
     exclude_paths = [os.path.abspath(p) for i in args.exclude_dataset_paths for p in glob.glob(i)]
     dataset_paths = sorted(set(include_paths) - set(exclude_paths))
+
+    print(f"Found {len(dataset_paths)} datasets")
 
     datasets = []
     for p in dataset_paths:
@@ -141,6 +144,11 @@ def main(args):
         dataset = preprocess_dataset(dataset, d_obs_uni=d_obs_uni, n_acts_uni=n_acts_uni)
         print(f"Dataset shape: {jax.tree_map(lambda x: x.shape, dataset)}")
         datasets.append(dataset)
+    # dataset = util.tree_cat(datasets)
+    dataset = {k: np.concatenate([d[k] for d in datasets], axis=0) for k in datasets[0].keys()}
+
+    print("----------------------------")
+    print(f"Dataset shape: {jax.tree_map(lambda x: x.shape, dataset)}")
 
     rng = jax.random.PRNGKey(0)
     if args.obj == 'bc':
@@ -155,7 +163,8 @@ def main(args):
         with open(f"{args.load_dir}/agent_params.pkl", 'rb') as f:
             agent_params = pickle.load(f)
     else:
-        batch = sample_batch_from_datasets(rng, datasets, 1)
+        # batch = sample_batch_from_datasets(rng, datasets, 1)
+        batch = sample_batch_from_dataset(rng, dataset, 1)
         batch = augment_batch(rng, batch, n_augs=1, do_time_perm=False)
         batch = jax.tree_map(lambda x: x[0], batch)
         agent_params = agent.init(_rng, batch['obs'], batch['act'])
@@ -208,7 +217,8 @@ def main(args):
             n_augs = args.n_augs
 
         rng, _rng = split(rng)
-        batch = sample_batch_from_datasets(rng, datasets, args.bs)
+        # batch = sample_batch_from_datasets(rng, datasets, args.bs)
+        batch = sample_batch_from_dataset(rng, dataset, args.bs)
         rng, train_state, metrics_i = do_iter(rng, train_state, batch, n_augs)
         metrics.append(metrics_i)
         pbar.set_postfix(loss=metrics_i['loss'].item())

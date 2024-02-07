@@ -160,7 +160,7 @@ class RandomCNN(nn.Module):
             nn.Conv2d(32, 32, 3, padding=1, stride=2),
             nn.Conv2d(32, 32, 3, padding=1, stride=2),
             nn.Flatten(),
-            nn.Linear(3872, 128),
+            nn.Linear(3872, 64),
         ])
 
     def forward(self, x):
@@ -364,11 +364,13 @@ if __name__ == "__main__":
 
     # -------------------- DATASET GENERATION --------------------
     print('Generating dataset...')
-    args.num_steps = 128
-    args.num_iterations = 8192 // args.num_envs
+    T = 128
+    args.num_steps = T
+    obs, actions, logprobs, rewards = obs[:T], actions[:T], logprobs[:T], rewards[:T]
+    dones, values, logits = dones[:T], values[:T], logits[:T]
+    args.num_iterations = 4096 // args.num_envs
     rand_cnn = RandomCNN().to(device)
     dataset = dict(obs=[], logits=[], act=[])
-    print(args.num_iterations)
     for iteration in range(1, args.num_iterations + 1):
         for step in range(0, args.num_steps):
             global_step += args.num_envs
