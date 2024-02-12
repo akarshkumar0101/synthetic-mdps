@@ -41,7 +41,7 @@ Transfer tasks:
 
 np.random.seed(0)
 envs_synthetic = []
-for i in range(32):
+for i in range(4):
     i_d, i_s, t_a, t_c, t_l, t_s, o_d, o_c, r_c = [np.random.randint(0, 5) for _ in range(9)]
     env_id = f"name=csmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_c={t_c};t_l={t_l};t_s={t_s};o_d={o_d};o_c={o_c};r_c={r_c};tl=64"
     envs_synthetic.append(env_id)
@@ -76,7 +76,8 @@ envs_atari_57 = ["Alien", "Amidar", "Assault", "Asterix", "Asteroids", "Atlantis
 envs_atari_16 = ["Pong", "Breakout", "SpaceInvaders", "Asterix", "Amidar", "Freeway", "Boxing", "Jamesbond",
                  "Riverraid", "Hero", "Krull", "Tutankham", "Kangaroo", "MsPacman", "Defender", "BeamRider"]
 
-envs_test = envs_classic + envs_minatar + envs_atari_16 + envs_procgen
+envs_test = envs_classic + envs_minatar
+# envs_test = envs_classic + envs_minatar + envs_atari_16 + envs_procgen
 
 dataset_dirs = {}
 for env_id in envs_synthetic:

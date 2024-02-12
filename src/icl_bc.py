@@ -27,11 +27,13 @@ parser.add_argument("--dataset_paths", type=str, nargs="+", default=[])
 parser.add_argument("--exclude_dataset_paths", type=str, nargs="+", default=[])
 parser.add_argument("--load_dir", type=str, default=None)
 parser.add_argument("--save_dir", type=str, default=None)
-parser.add_argument("--save_agent", type=lambda x: x == "True", default=False)
+# parser.add_argument("--save_agent", type=lambda x: x == "True", default=False)
+parser.add_argument("--n_ckpts", type=int, default=None)
 
+parser.add_argument("--n_iters_eval", type=int, default=10000)
 parser.add_argument("--n_iters", type=int, default=10000)
+
 parser.add_argument("--n_augs", type=int, default=int(1e9))
-parser.add_argument("--curriculum", type=str, default="none")
 parser.add_argument("--time_perm", type=lambda x: x == "True", default=False)
 
 parser.add_argument("--bs", type=int, default=256)
@@ -41,6 +43,9 @@ parser.add_argument("--clip_grad_norm", type=float, default=1.)
 
 parser.add_argument("--obj", type=str, default="bc")  # bc or wm
 
+
+# parser.add_argument("--curriculum", type=str, default="none")
+# n_augs = int(jnp.e ** ((jnp.log(args.n_augs) / args.n_iters) * i_iter))
 
 def parse_args(*args, **kwargs):
     args = parser.parse_args(*args, **kwargs)
@@ -125,6 +130,7 @@ def sample_batch_from_datasets(rng, datasets, bs):
 
 def main(args):
     print(args)
+    assert args.n_iters % args.n_ckpts == 0
     # run = wandb.init(entity=args.entity, project=args.project, name=args.name, config=args)
     d_obs_uni = 64
     n_acts_uni = 18
@@ -199,55 +205,72 @@ def main(args):
 
     loss_fn = {'bc': loss_fn_bc, 'wm': loss_fn_wm}[args.obj]
 
-    def do_iter(rng, train_state, batch, n_augs):
-        rng, _rng = split(rng)
-        batch = augment_batch(_rng, batch, n_augs=n_augs, do_time_perm=args.time_perm)
+    def iter_eval(rng, train_state, batch):
+        if args.n_augs > 0:
+            batch = augment_batch(rng, batch, n_augs=args.n_augs, do_time_perm=args.time_perm)
+        metrics = loss_fn(train_state.params, batch)
+        return train_state, metrics
+
+    def iter_step(rng, train_state, batch):
+        if args.n_augs > 0:
+            batch = augment_batch(rng, batch, n_augs=args.n_augs, do_time_perm=args.time_perm)
         (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(train_state.params, batch)
         train_state = train_state.apply_gradients(grads=grads)
-        return rng, train_state, metrics
+        return train_state, metrics
 
-    do_iter = jax.jit(do_iter)
-
-    metrics = []
-    pbar = tqdm(range(args.n_iters))
-    for i_iter in pbar:
-        if args.curriculum == 'linear_log':
-            n_augs = int(jnp.e ** ((jnp.log(args.n_augs) / args.n_iters) * i_iter))
-        else:
-            n_augs = args.n_augs
-
-        rng, _rng = split(rng)
-        # batch = sample_batch_from_datasets(rng, datasets, args.bs)
-        batch = sample_batch_from_dataset(rng, dataset, args.bs)
-        rng, train_state, metrics_i = do_iter(rng, train_state, batch, n_augs)
-        metrics.append(metrics_i)
-        pbar.set_postfix(loss=metrics_i['loss'].item())
-
-        # if i_iter % max(1, args.n_iters // 1000) == 0:
-        #     wandb_data = dict(n_augs=n_augs,
-        #                       tar_acc=metrics_i['tar_acc'].mean(),
-        #                       tar_entr=metrics_i['tar_entr'].mean(), tar_ppl=metrics_i['tar_ppl'].mean())
-        #     for k in ['ce', 'kldiv', 'entr', 'ppl', 'acc']:
-        #         wandb_data[f"{k}"] = metrics_i[k].mean()
-        #         wandb_data[f"{k}_first"] = metrics_i[k][0]
-        #         wandb_data[f"{k}_last"] = metrics_i[k][-1]
-        #     if i_iter % max(1, args.n_iters // 10) == 0:
-        #         for k in ['kldiv', 'acc', 'ppl']:
-        #             x = jnp.stack([jnp.arange(T), metrics_i[k]], axis=-1)  # (T, 2)
-        #             table = wandb.Table(data=x.tolist(), columns=['token_pos', 'val'])
-        #             wandb_data[f"{k}_vs_ctx"] = wandb.plot.line(table, 'token_pos', 'val', title=f'{k} vs token_pos')
-        #     wandb.log(wandb_data, step=i_iter)
-    metrics = util.tree_stack(metrics)
+    iter_eval, iter_step = jax.jit(iter_eval), jax.jit(iter_step)
 
     if args.save_dir is not None:
         os.makedirs(f"{args.save_dir}/", exist_ok=True)
-        with open(f"{args.save_dir}/metrics.pkl", 'wb') as f:
-            pickle.dump(metrics, f)
-        if args.save_agent:
-            with open(f"{args.save_dir}/agent_params.pkl", 'wb') as f:
-                pickle.dump(train_state.params, f)
 
-    # wandb.finish()
+    metrics_before, metrics_train, metrics_after = [], [], []
+
+    pbar = tqdm(range(args.n_iters_eval), desc="Before")
+    for i_iter in pbar:
+        rng, _rng = split(rng)
+        batch = sample_batch_from_dataset(_rng, dataset, args.bs)
+        rng, _rng = split(rng)
+        train_state, metrics = iter_eval(_rng, train_state, batch)
+        pbar.set_postfix(loss=metrics['loss'].item())
+        metrics_before.append(metrics)
+    metrics_before = util.tree_stack(metrics_before)
+    if args.save_dir is not None:
+        with open(f"{args.save_dir}/metrics_before.pkl", 'wb') as f:
+            pickle.dump(metrics_before, f)
+
+    pbar = tqdm(range(args.n_iters), desc="Training")
+    for i_iter in pbar:
+        rng, _rng = split(rng)
+        batch = sample_batch_from_dataset(rng, dataset, args.bs)
+        rng, _rng = split(rng)
+        train_state, metrics = iter_step(_rng, train_state, batch)
+        pbar.set_postfix(loss=metrics['loss'].item())
+        metrics_train.append(metrics)
+
+        if args.save_dir is not None and args.n_ckpts is not None and i_iter % (args.n_iters // args.n_ckpts) == 0:
+            i_ckpt = i_iter // (args.n_iters // args.n_ckpts)
+            with open(f"{args.save_dir}/ckpt_{i_ckpt}.pkl", 'wb') as f:
+                pickle.dump(dict(i_ckpt=i_ckpt, params=train_state.params), f)
+    metrics_train = util.tree_stack(metrics_train)
+    if args.save_dir is not None:
+        with open(f"{args.save_dir}/metrics_train.pkl", 'wb') as f:
+            pickle.dump(metrics_train, f)
+
+    pbar = tqdm(range(args.n_iters_eval), desc="After")
+    for i_iter in pbar:
+        rng, _rng = split(rng)
+        batch = sample_batch_from_dataset(_rng, dataset, args.bs)
+        rng, _rng = split(rng)
+        train_state, metrics = iter_eval(_rng, train_state, batch)
+        pbar.set_postfix(loss=metrics['loss'].item())
+        metrics_after.append(metrics)
+    metrics_after = util.tree_stack(metrics_after)
+    if args.save_dir is not None:
+        with open(f"{args.save_dir}/metrics_after.pkl", 'wb') as f:
+            pickle.dump(metrics_after, f)
+        if args.save_dir is not None and args.n_ckpts is not None:
+            with open(f"{args.save_dir}/ckpt_{args.n_ckpts}.pkl", 'wb') as f:
+                pickle.dump(dict(i_ckpt=args.n_ckpts, params=train_state.params), f)
 
 
 if __name__ == '__main__':
