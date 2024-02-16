@@ -18,3 +18,7 @@ brax
 matplotlib
 jupyter
 jupyterlab
+
+
+envpool==0.6.6 ; python_version >= "3.8" and python_version < "3.11"
+procgen==0.10.7 ; python_version >= "3.8" and python_version < "3.11"

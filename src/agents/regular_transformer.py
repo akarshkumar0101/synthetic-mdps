@@ -81,11 +81,15 @@ class BCTransformer(nn.Module):
         self.actor = nn.Dense(features=self.n_acts, kernel_init=nn.initializers.orthogonal(0.01))  # T, A
 
     def __call__(self, obs, act):  # obs: (T, O), # act: (T, )
+        assert obs.shape[0] == act.shape[0]
+        assert obs.shape[0] <= self.n_steps
+        T, _ = obs.shape
+
         act_p = jnp.concatenate([jnp.zeros_like(act[:1]), act[:-1]], axis=0)
 
         x_obs = self.embed_obs(obs)  # (T, D)
         x_act = self.embed_act(act_p)  # (T, D)
-        x_time = self.embed_time(jnp.arange(self.n_steps))  # (T, D)
+        x_time = self.embed_time(jnp.arange(T))  # (T, D)
         x = x_obs + x_act + x_time
 
         for block in self.blocks:

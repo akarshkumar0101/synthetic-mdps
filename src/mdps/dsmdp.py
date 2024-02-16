@@ -1,61 +1,69 @@
-import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from gymnax.environments import spaces
+
+from .smdp import Discrete, Box
 
 
-def eye(key, shape, dtype):
-    return jnp.eye(*shape, dtype=dtype)
+class Init:
+    def __init__(self, n_states, std=0.):
+        self.n_states, self.std = n_states, std
+
+    def sample_params(self, rng):
+        logits = jax.random.normal(rng, (self.n_states,)) * self.std
+        params = dict(logits=logits)
+        return params
+
+    def __call__(self, rng, params):
+        return jax.random.categorical(rng, params['logits'])
+
+    def state_space(self, params):
+        return Discrete(self.n_states)
 
 
-class DiscreteInit(nn.Module):
-    n_states: int
-    initializer: nn.initializers.Initializer = nn.initializers.zeros_init()
+class Transition:
+    def __init__(self, n_states, n_acts):
+        self.n_states, self.n_acts = n_states, n_acts
 
-    def setup(self):
-        self.logits = self.param('logits', self.initializer, (self.n_states,))
+    def sample_params(self, rng):
+        trans_matrix = jax.random.normal(rng, (self.n_acts, self.n_states, self.n_states))
+        params = dict(trans_matrix=trans_matrix)
+        return params
 
-    def __call__(self, rng):
-        return jax.random.categorical(rng, self.logits)
-
-
-class DiscreteTransition(nn.Module):
-    n_states: int
-    initializer: nn.initializers.Initializer = nn.initializers.normal(stddev=1.)
-
-    def setup(self):
-        self.trans_matrix = self.param('trans_matrix', self.initializer, (self.n_states, self.n_states))
-
-    def __call__(self, state, rng):
-        logits = self.trans_matrix[:, state]
+    def __call__(self, rng, state, action, params):
+        trans_matrix = params['trans_matrix']
+        logits = trans_matrix[action, :, state]
         state_n = jax.random.categorical(rng, logits)
         return state_n
 
+    def action_space(self, params):
+        return Discrete(self.n_acts)
 
-class DiscreteObs(nn.Module):
-    n_states: int
-    d_obs: int
-    initializer: nn.initializers.Initializer = eye
 
-    def setup(self):
-        self.embed = nn.Embed(self.n_states, self.d_obs, embedding_init=self.initializer)
+class Observation:
+    def __init__(self, n_states, d_obs):
+        self.n_states, self.d_obs = n_states, d_obs
 
-    def __call__(self, state):
-        return self.embed(state)
+    def sample_params(self, rng):
+        obs_matrix = jax.random.normal(rng, (self.n_states, self.d_obs))
+        params = dict(obs_matrix=obs_matrix)
+        return params
+
+    def __call__(self, rng, state, params):
+        obs_matrix = params['obs_matrix']
+        return obs_matrix[state]
 
     def observation_space(self, params):
-        return spaces.Box(-1, 1, (self.d_obs,), dtype=jnp.float32)
+        return Box(-3, 3, (self.d_obs,), dtype=jnp.float32)
 
 
-class DiscreteReward(nn.Module):
-    n_states: int
-    initializer: nn.initializers.Initializer = nn.initializers.uniform(scale=1.)
+class DenseReward:
+    def __init__(self, n_states):
+        self.n_states = n_states
 
-    # def initializer(self, rng, shape, dtype):
-    #     return jax.random.uniform(rng, shape, dtype=dtype)
+    def sample_params(self, rng):
+        rew_matrix = jax.random.normal(rng, (self.n_states,))
+        params = dict(rew_matrix=rew_matrix)
+        return params
 
-    def setup(self):
-        self.rew_matrix = self.param('rew_matrix', self.initializer, (self.n_states,))
-
-    def __call__(self, state):
-        return self.rew_matrix[state]
+    def __call__(self, rng, state, params):
+        return params['rew_matrix'][state]
