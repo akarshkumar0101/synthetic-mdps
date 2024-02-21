@@ -21,11 +21,12 @@ class Init:
 
 
 class Transition:
-    def __init__(self, n_states, n_acts):
+    def __init__(self, n_states, n_acts, std=0.):
         self.n_states, self.n_acts = n_states, n_acts
+        self.std = std
 
     def sample_params(self, rng):
-        trans_matrix = jax.random.normal(rng, (self.n_acts, self.n_states, self.n_states))
+        trans_matrix = self.std * jax.random.normal(rng, (self.n_acts, self.n_states, self.n_states))
         params = dict(trans_matrix=trans_matrix)
         return params
 
@@ -40,8 +41,9 @@ class Transition:
 
 
 class Observation:
-    def __init__(self, n_states, d_obs):
+    def __init__(self, n_states, d_obs, std=0.):
         self.n_states, self.d_obs = n_states, d_obs
+        self.std = std
 
     def sample_params(self, rng):
         obs_matrix = jax.random.normal(rng, (self.n_states, self.d_obs))
@@ -49,21 +51,27 @@ class Observation:
         return params
 
     def __call__(self, rng, state, params):
-        obs_matrix = params['obs_matrix']
-        return obs_matrix[state]
+        mean = params['obs_matrix'][state]
+        noise = jax.random.normal(rng, (self.d_obs,))
+        obs = mean + noise * self.std
+        return obs
 
     def observation_space(self, params):
         return Box(-3, 3, (self.d_obs,), dtype=jnp.float32)
 
 
 class DenseReward:
-    def __init__(self, n_states):
+    def __init__(self, n_states, std=0.):
         self.n_states = n_states
+        self.std = std
 
     def sample_params(self, rng):
-        rew_matrix = jax.random.normal(rng, (self.n_states,))
+        rew_matrix = jax.random.normal(rng, (self.n_states, 1))
         params = dict(rew_matrix=rew_matrix)
         return params
 
     def __call__(self, rng, state, params):
-        return params['rew_matrix'][state]
+        mean = params['rew_matrix'][state]
+        noise = jax.random.normal(rng, (1,))
+        rew = mean + noise * self.std
+        return rew[..., 0]

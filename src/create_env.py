@@ -48,10 +48,19 @@ def create_env(env_id):
         model_done = smdp.NeverDone()
         env = smdp.SyntheticMDP(model_init, model_trans, model_obs, model_rew, model_done)
     elif env_cfg['name'] == 'dsmdp':
-        model_init = dsmdp.Init(16, std=1.)
-        model_trans = dsmdp.Transition(16, 4)
-        model_obs = dsmdp.Observation(16, 8)
-        model_rew = dsmdp.DenseReward(16)
+        i_d = [8, 16, 32, 64, 128][int(env_cfg['i_d'])]
+        i_s = [1000., 4, 2, 1, 0][int(env_cfg['i_s'])]
+        model_init = dsmdp.Init(i_d, std=i_s)
+
+        t_a = [1, 2, 3, 4, 5][int(env_cfg['t_a'])]
+        t_s = [1000., 5, 4, 3, 2][int(env_cfg['i_s'])]
+        model_trans = dsmdp.Transition(i_d, n_acts=t_a, std=t_s)
+
+        o_d = [2, 4, 8, 16, 32][int(env_cfg['o_d'])]
+        model_obs = dsmdp.Observation(i_d, d_obs=o_d, std=0.)
+
+        model_rew = dsmdp.DenseReward(i_d, std=0.)
+
         model_done = smdp.NeverDone()
 
         env = smdp.SyntheticMDP(model_init, model_trans, model_obs, model_rew, model_done)

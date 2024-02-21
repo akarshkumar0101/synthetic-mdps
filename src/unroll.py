@@ -3,6 +3,7 @@ import pickle
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import config as jax_config
 from jax.random import split
 from tqdm.auto import tqdm
@@ -95,12 +96,10 @@ def main(args):
     dones = jnp.stack(dones, axis=0)
     rets = jnp.stack(rets, axis=0)
 
-    score = rets[-500:, :].mean()
-    score_mean = rets[-500:, :].mean().item()
-    score_std = rets[-500:, :].std().item()
+    rets = np.asarray(rets[-500:, :]).mean(axis=0)
     with open(args.save_path, 'wb') as f:
-        pickle.dump(dict(mean=score_mean, std=score_std), f)
-    print(f"Score: {score}")
+        pickle.dump(dict(rets=rets), f)
+    print(f"Score: {rets.mean()}")
 
 
 if __name__ == '__main__':

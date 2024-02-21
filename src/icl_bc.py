@@ -182,7 +182,11 @@ def main(args):
         batch = jax.tree_map(lambda x: x[0], batch)
         agent_params = agent.init(_rng, batch['obs'], batch['act'])
 
-    tx = optax.chain(optax.clip_by_global_norm(args.clip_grad_norm), optax.adam(args.lr, eps=1e-8))
+    lr_warmup = optax.linear_schedule(0., args.lr, args.n_iters // 100)
+    lr_main = optax.constant_schedule(args.lr)
+    lr_schedule = optax.join_schedules([lr_warmup, lr_main], [args.n_iters // 100])
+    tx = optax.chain(optax.clip_by_global_norm(args.clip_grad_norm), optax.adam(lr_schedule, eps=1e-8))
+    # tx = optax.chain(optax.clip_by_global_norm(args.clip_grad_norm), optax.adam(args.lr, eps=1e-8))
     train_state = TrainState.create(apply_fn=agent.apply, params=agent_params, tx=tx)
 
     def loss_fn_bc(agent_params, batch):
@@ -245,6 +249,11 @@ def main(args):
 
     pbar = tqdm(range(args.n_iters), desc="Training")
     for i_iter in pbar:
+        if args.n_ckpts > 0 and i_iter % (args.n_iters // args.n_ckpts) == 0:
+            i_ckpt = i_iter // (args.n_iters // args.n_ckpts)
+            with open(f"{args.save_dir}/ckpt_{i_ckpt}.pkl", 'wb') as f:
+                pickle.dump(dict(i_ckpt=i_ckpt, i_iter=i_iter, params=train_state.params), f)
+
         rng, _rng = split(rng)
         batch = sample_batch_from_dataset(_rng, dataset, args.bs)
         if args.n_augs > 0:
@@ -258,10 +267,6 @@ def main(args):
         pbar.set_postfix(loss=metrics['loss'].item(), n_augs=n_augs)
         metrics_train.append(metrics)
 
-        if args.n_ckpts > 0 and i_iter % (args.n_iters // args.n_ckpts) == 0:
-            i_ckpt = i_iter // (args.n_iters // args.n_ckpts)
-            with open(f"{args.save_dir}/ckpt_{i_ckpt}.pkl", 'wb') as f:
-                pickle.dump(dict(i_ckpt=i_ckpt, i_iter=i_iter, params=train_state.params), f)
     metrics_train = util.tree_stack(metrics_train)
     if args.save_dir is not None:
         with open(f"{args.save_dir}/metrics_train.pkl", 'wb') as f:

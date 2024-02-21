@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torchvision.transforms
 import tyro
 from procgen import ProcgenEnv
 from torch.distributions.categorical import Categorical
@@ -91,8 +92,9 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
-rn_mean = torch.tensor([0.485, 0.456, 0.406]).to('cuda')
-rn_std = torch.tensor([0.229, 0.224, 0.225]).to('cuda')
+rn_mean = torch.tensor([0.485, 0.456, 0.406])[:, None, None].to('cuda')
+rn_std = torch.tensor([0.229, 0.224, 0.225])[:, None, None].to('cuda')
+resize_transform = torchvision.transforms.Resize((224, 224))
 resnet = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1).to('cuda')
 
 activation = {}
@@ -111,9 +113,14 @@ resnet.layer3.register_forward_hook(get_activation('layer3'))
 resnet.layer4.register_forward_hook(get_activation('layer4'))
 
 
+@torch.no_grad()
 def embed_obs(obs):
-    with torch.no_grad():
-        _ = resnet(obs)
+    x = obs
+    x = x.permute((0, 3, 1, 2))  # "bhwc" -> "bchw"
+    x = resize_transform(x)  # rescale to 224x224 with torchvision
+    x = x / 255.0
+    x = (x - rn_mean) / rn_std
+    y = resnet(x)
     features = activation[f'layer{args.rn_layer}'].mean(axis=(-1, -2))
     return features
 
@@ -121,8 +128,6 @@ def embed_obs(obs):
 class Agent(nn.Module):
     def __init__(self, envs):
         super().__init__()
-        layer2nin = {1: 64, 2: 128, 3: 256, 4: 512}
-        nin = layer2nin[args.rn_layer]
         self.actor = nn.Sequential(
             layer_init(nn.Linear(nin, 256)),
             nn.ReLU(),
@@ -139,22 +144,14 @@ class Agent(nn.Module):
         )
 
     def get_value(self, x):
-        x = x / 255.0  # "bhwc" -> "bchw"
-        x = (x - rn_mean) / rn_std
-        x = x.permute((0, 3, 1, 2))
-        hidden = embed_obs(x)
-        return self.critic(hidden)  # "bhwc" -> "bchw"
+        return self.critic(x)  # "bhwc" -> "bchw"
 
     def get_action_and_value(self, x, action=None):
-        x = x / 255.0  # "bhwc" -> "bchw"
-        x = (x - rn_mean) / rn_std
-        x = x.permute((0, 3, 1, 2))
-        hidden = embed_obs(x)
-        logits = self.actor(hidden)
+        logits = self.actor(x)
         probs = Categorical(logits=logits)
         if action is None:
             action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy(), self.critic(hidden), probs.logits
+        return action, probs.log_prob(action), probs.entropy(), self.critic(x), probs.logits
 
 
 class RandomCNN(nn.Module):
@@ -174,6 +171,8 @@ class RandomCNN(nn.Module):
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
+    layer2nin = {1: 64, 2: 128, 3: 256, 4: 512}
+    nin = layer2nin[args.rn_layer]
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
@@ -223,7 +222,7 @@ if __name__ == "__main__":
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # ALGO Logic: Storage setup
-    obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
+    obs = torch.zeros((args.num_steps, args.num_envs, nin)).to(device)
     actions = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
     logprobs = torch.zeros((args.num_steps, args.num_envs)).to(device)
     rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
@@ -235,6 +234,8 @@ if __name__ == "__main__":
     global_step = 0
     start_time = time.time()
     next_obs = torch.Tensor(envs.reset()).to(device)
+    next_obs = embed_obs(next_obs)
+
     next_done = torch.zeros(args.num_envs).to(device)
 
     for iteration in range(1, args.num_iterations + 1):
@@ -261,6 +262,7 @@ if __name__ == "__main__":
             next_obs, reward, next_done, info = envs.step(action.cpu().numpy())
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
+            next_obs = embed_obs(next_obs)
 
             for item in info:
                 if "episode" in item.keys():
@@ -286,7 +288,7 @@ if __name__ == "__main__":
             returns = advantages + values
 
         # flatten the batch
-        b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
+        b_obs = obs.reshape((-1, nin))
         b_logprobs = logprobs.reshape(-1)
         b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
         b_advantages = advantages.reshape(-1)
@@ -399,7 +401,7 @@ if __name__ == "__main__":
                     writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
                     break
 
-        dobs = obs.reshape(args.num_steps * args.num_envs, *envs.single_observation_space.shape)
+        dobs = obs.reshape(args.num_steps * args.num_envs, nin)
         with torch.no_grad():
             dobs = rand_cnn(dobs)
         dobs = dobs.reshape(args.num_steps, args.num_envs, -1)

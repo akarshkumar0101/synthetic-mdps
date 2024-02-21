@@ -42,12 +42,22 @@ Transfer tasks:
 
 np.random.seed(0)
 envs_synthetic = []
-for i in range(2):
+for i in range(3):
     i_d, i_s, t_a, t_c, t_l, t_s, o_d, o_c, r_c = [np.random.randint(0, 5) for _ in range(9)]
     env_id = f"name=csmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_c={t_c};t_l={t_l};t_s={t_s};o_d={o_d};o_c={o_c};r_c={r_c};tl=64"
     envs_synthetic.append(env_id)
+for i in range(3):
+    i_d, i_s, t_a, t_s, o_d = [np.random.randint(0, 5) for _ in range(5)]
+    env_id = f"name=dsmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_s={t_s};o_d={o_d};tl=64"
+    envs_synthetic.append(env_id)
 
-envs_synthetic += ['random_function', 'zero_act']
+np.random.seed(1)
+for i in range(3):
+    t_a, t_c, o_d = [np.random.randint(0, 5) for _ in range(3)]
+    env_id = f"name=rf;t_a={t_a};t_c={t_c};o_d={o_d}"
+    envs_synthetic.append(env_id)
+
+envs_synthetic += ['zero_act']
 
 envs_classic = [
     "name=CartPole-v1",
@@ -94,6 +104,17 @@ for env_id in envs_procgen:
 for env_id in envs_atari_57:
     dataset_dirs[env_id] = f"/real/atari/{env_id}/"
 
+env_test2ft_steps = {
+    "name=CartPole-v1": 100,
+    "name=Acrobot-v1": 100,
+    "name=MountainCar-v0": 100,
+    "name=DiscretePendulum-v1": 100,
+    "name=Asterix-MinAtar": 500,
+    "name=Breakout-MinAtar": 500,
+    "name=Freeway-MinAtar": 100,
+    "name=SpaceInvaders-MinAtar": 500,
+}
+
 
 # def change_to_n_gpus(txt, n_gpus):
 #     lines = [line for line in txt.split("\n") if line]
@@ -106,7 +127,7 @@ for env_id in envs_atari_57:
 #     return out
 
 
-def exp_train(dir_exp, obj="bc", n_augs=0, n_iters_eval=40, n_iters=2000):
+def exp_train(dir_exp, obj="bc", n_augs=0, n_iters_eval=40, n_iters=3000):
     cfg_default = vars(icl_bc.parse_args())
     # print(cfg_default)
 
@@ -162,6 +183,7 @@ def exp_test(dir_exp, obj="bc"):
 
     cfgs = []
     for env_id_test in envs_test:
+        n_iters = env_test2ft_steps[env_id_test]
         # ---------------- TRAINED ON TRAIN/TEST ----------------
         for env_id_train in [*envs_train, env_id_test]:
             cfg = cfg_default.copy()
@@ -169,7 +191,7 @@ def exp_test(dir_exp, obj="bc"):
                 dataset_path=f'{dir_exp}/datasets/{dataset_dirs[env_id_test]}/dataset.pkl',
                 load_dir=f"{dir_exp}/train_{obj}/{env_id_train}",
                 save_dir=f"{dir_exp}/test_{obj}/{env_id_test}/{env_id_train}",
-                n_iters=100, obj=obj, save_agent=True, n_ckpts=5,
+                n_iters=n_iters, obj=obj, save_agent=True, n_ckpts=5,
             )
             cfgs.append(cfg)
         # ---------------- TRAINED ON ALL ----------------
@@ -178,7 +200,7 @@ def exp_test(dir_exp, obj="bc"):
             dataset_path=f'{dir_exp}/datasets/{dataset_dirs[env_id_test]}/dataset.pkl',
             load_dir=f"{dir_exp}/train_{obj}/all",
             save_dir=f"{dir_exp}/test_{obj}/{env_id_test}/all",
-            n_iters=100, obj=obj, save_agent=True, n_ckpts=5,
+            n_iters=n_iters, obj=obj, save_agent=True, n_ckpts=5,
         )
         cfgs.append(cfg)
 
@@ -188,7 +210,7 @@ def exp_test(dir_exp, obj="bc"):
             dataset_path=f'{dir_exp}/datasets/{dataset_dirs[env_id_test]}/dataset.pkl',
             load_dir=f"{dir_exp}/train_{obj}/all-{env_id_test}",
             save_dir=f"{dir_exp}/test_{obj}/{env_id_test}/n-1",
-            n_iters=100, obj=obj, save_agent=True, n_ckpts=5,
+            n_iters=n_iters, obj=obj, save_agent=True, n_ckpts=5,
         )
         cfgs.append(cfg)
 
@@ -198,7 +220,7 @@ def exp_test(dir_exp, obj="bc"):
             dataset_path=f'{dir_exp}/datasets/{dataset_dirs[env_id_test]}/dataset.pkl',
             load_dir=None,
             save_dir=f"{dir_exp}/test_{obj}/{env_id_test}/scratch",
-            n_iters=100, obj=obj, save_agent=True, n_ckpts=5,
+            n_iters=n_iters, obj=obj, save_agent=True, n_ckpts=5,
         )
         cfgs.append(cfg)
 
@@ -405,7 +427,7 @@ if __name__ == '__main__':
     write_to_nodes_gpus("./experiment/test_bc.sh", txt, n_nodes, n_gpus)
 
     txt = exp_unroll(dir_exp, obj="bc")
-    write_to_nodes_gpus("./experiment/unroll_bc.sh", txt, n_nodes, n_gpus)
+    write_to_nodes_gpus("./experiment/unroll_bc.sh", txt, n_nodes=8, n_gpus=4)
 
     # txt = exp_train(dir_exp, obj="wm")
     # write_to_nodes_gpus("./experiment/train_wm.sh", txt, n_nodes, n_gpus)

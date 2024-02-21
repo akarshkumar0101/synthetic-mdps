@@ -1,4 +1,5 @@
 import argparse
+import os
 import pickle
 from functools import partial
 
@@ -53,18 +54,23 @@ def gen_dataset_zero_act(rng):
         pickle.dump(dataset, f)
 
 
-def gen_dataset_random(rng):
+def gen_dataset_random(rng, env_id):
+    env_cfg = dict([sub.split('=') for sub in env_id.split(';')])
+    t_a = [1, 2, 3, 4, 5][int(env_cfg['t_a'])]
+    o_d = [2, 4, 8, 16, 32][int(env_cfg['o_d'])]
+    t_c = [0, 1, 2, 4, 8][int(env_cfg['t_c'])]
+
     rng = jax.random.PRNGKey(0)
 
-    net = RandomMLP(n_layers=4, d_hidden=64, d_out=4, activation=jax.nn.relu)
+    net = RandomMLP(n_layers=t_c, d_hidden=64, d_out=t_a, activation=jax.nn.relu)
 
     rng, _rng = split(rng)
-    x = jax.random.normal(_rng, (32, 4))
+    x = jax.random.normal(_rng, (32, o_d))
     rng, _rng = split(rng)
     net_params = create_random_net(net, _rng, x)
 
     rng, _rng = split(rng)
-    obs = jax.random.normal(_rng, (4096, 128, 4))
+    obs = jax.random.normal(_rng, (4096, 128, o_d))
     logits = 5 * jax.vmap(jax.vmap(partial(net.apply, net_params)))(obs)
 
     rng, _rng = split(rng)
@@ -73,13 +79,16 @@ def gen_dataset_random(rng):
     dataset = dict(obs=obs, logits=logits, act=act)
     print(jax.tree_map(lambda x: x.shape, dataset))
 
-    with open("../data/exp_icl/datasets/synthetic/random_function/dataset.pkl", "wb") as f:
+    os.makedirs(f"../data/exp_icl/datasets/synthetic/{env_id}", exist_ok=True)
+    with open(f"../data/exp_icl/datasets/synthetic/{env_id}/dataset.pkl", "wb") as f:
         pickle.dump(dataset, f)
 
 
 def main(args):
-    gen_dataset_zero_act(rng=jax.random.PRNGKey(0))
-    gen_dataset_random(rng=jax.random.PRNGKey(0))
+    # gen_dataset_zero_act(rng=jax.random.PRNGKey(0))
+    gen_dataset_random(jax.random.PRNGKey(0), "name=rf;t_a=3;t_c=4;o_d=0")
+    gen_dataset_random(jax.random.PRNGKey(1), "name=rf;t_a=1;t_c=3;o_d=0")
+    gen_dataset_random(jax.random.PRNGKey(2), "name=rf;t_a=0;t_c=1;o_d=4")
 
 
 if __name__ == '__main__':
