@@ -109,9 +109,9 @@ env_test2ft_steps = {
     "name=Acrobot-v1": 100,
     "name=MountainCar-v0": 100,
     "name=DiscretePendulum-v1": 100,
-    "name=Asterix-MinAtar": 500,
+    "name=Asterix-MinAtar": 2000,
     "name=Breakout-MinAtar": 500,
-    "name=Freeway-MinAtar": 100,
+    "name=Freeway-MinAtar": 2000,
     "name=SpaceInvaders-MinAtar": 500,
 }
 
