@@ -180,49 +180,64 @@ def exp_train(dir_exp, obj="bc", n_augs=0, n_iters_eval=40, n_iters=3000):
 def exp_test(dir_exp, obj="bc"):
     cfg_default = vars(icl_bc.parse_args())
     # print(cfg_default)
+    lrs = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1]
+    # lrs = [3e-4]
+    # percent_datas = [0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0]
+    percent_datas = [1.0]
 
     cfgs = []
-    for env_id_test in envs_test:
-        n_iters = env_test2ft_steps[env_id_test]
-        # ---------------- TRAINED ON TRAIN/TEST ----------------
-        for env_id_train in [*envs_train, env_id_test]:
-            cfg = cfg_default.copy()
-            cfg.update(
-                dataset_path=f'{dir_exp}/datasets/{dataset_dirs[env_id_test]}/dataset.pkl',
-                load_dir=f"{dir_exp}/train_{obj}/{env_id_train}",
-                save_dir=f"{dir_exp}/test_{obj}/{env_id_test}/{env_id_train}",
-                n_iters=n_iters, obj=obj, save_agent=True, n_ckpts=5,
-            )
-            cfgs.append(cfg)
-        # ---------------- TRAINED ON ALL ----------------
-        cfg = cfg_default.copy()
-        cfg.update(
-            dataset_path=f'{dir_exp}/datasets/{dataset_dirs[env_id_test]}/dataset.pkl',
-            load_dir=f"{dir_exp}/train_{obj}/all",
-            save_dir=f"{dir_exp}/test_{obj}/{env_id_test}/all",
-            n_iters=n_iters, obj=obj, save_agent=True, n_ckpts=5,
-        )
-        cfgs.append(cfg)
+    for lr in lrs:
+        for pd in percent_datas:
+            for env_id_test in envs_test:
+                # n_iters = env_test2ft_steps[env_id_test]
+                n_iters = 1000
+                # ---------------- TRAINED ON TRAIN/TEST ----------------
+                for env_id_train in [*envs_train, env_id_test]:
+                    cfg = cfg_default.copy()
+                    cfg.update(
+                        dataset_path=f'{dir_exp}/datasets/{dataset_dirs[env_id_test]}/dataset.pkl',
+                        load_dir=f"{dir_exp}/train_{obj}/{env_id_train}",
+                        save_dir=f"{dir_exp}/test_{obj}/{env_id_test}/{env_id_train}_lr={lr}_pd={pd}",
+                        n_iters=n_iters, obj=obj,
+                        # save_agent=True, n_ckpts=5,
+                        lr=lr, percent_data=pd,
+                    )
+                    cfgs.append(cfg)
+                # ---------------- TRAINED ON ALL ----------------
+                cfg = cfg_default.copy()
+                cfg.update(
+                    dataset_path=f'{dir_exp}/datasets/{dataset_dirs[env_id_test]}/dataset.pkl',
+                    load_dir=f"{dir_exp}/train_{obj}/all",
+                    save_dir=f"{dir_exp}/test_{obj}/{env_id_test}/all_lr={lr}_pd={pd}",
+                    n_iters=n_iters, obj=obj,
+                    # save_agent=True, n_ckpts=5,
+                    lr=lr, percent_data=pd,
+                )
+                cfgs.append(cfg)
 
-        # ---------------- TRAINED ON N-1 ----------------
-        cfg = cfg_default.copy()
-        cfg.update(
-            dataset_path=f'{dir_exp}/datasets/{dataset_dirs[env_id_test]}/dataset.pkl',
-            load_dir=f"{dir_exp}/train_{obj}/all-{env_id_test}",
-            save_dir=f"{dir_exp}/test_{obj}/{env_id_test}/n-1",
-            n_iters=n_iters, obj=obj, save_agent=True, n_ckpts=5,
-        )
-        cfgs.append(cfg)
+                # ---------------- TRAINED ON N-1 ----------------
+                cfg = cfg_default.copy()
+                cfg.update(
+                    dataset_path=f'{dir_exp}/datasets/{dataset_dirs[env_id_test]}/dataset.pkl',
+                    load_dir=f"{dir_exp}/train_{obj}/all-{env_id_test}",
+                    save_dir=f"{dir_exp}/test_{obj}/{env_id_test}/n-1_lr={lr}_pd={pd}",
+                    n_iters=n_iters, obj=obj,
+                    # save_agent=True, n_ckpts=5,
+                    lr=lr, percent_data=pd,
+                )
+                cfgs.append(cfg)
 
-        # ---------------- FROM-SCRATCH ----------------
-        cfg = cfg_default.copy()
-        cfg.update(
-            dataset_path=f'{dir_exp}/datasets/{dataset_dirs[env_id_test]}/dataset.pkl',
-            load_dir=None,
-            save_dir=f"{dir_exp}/test_{obj}/{env_id_test}/scratch",
-            n_iters=n_iters, obj=obj, save_agent=True, n_ckpts=5,
-        )
-        cfgs.append(cfg)
+                # ---------------- FROM-SCRATCH ----------------
+                cfg = cfg_default.copy()
+                cfg.update(
+                    dataset_path=f'{dir_exp}/datasets/{dataset_dirs[env_id_test]}/dataset.pkl',
+                    load_dir=None,
+                    save_dir=f"{dir_exp}/test_{obj}/{env_id_test}/scratch_lr={lr}_pd={pd}",
+                    n_iters=n_iters, obj=obj,
+                    # save_agent=True, n_ckpts=5,
+                    lr=lr, percent_data=pd,
+                )
+                cfgs.append(cfg)
 
     txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_bc.py')
     return txt
@@ -424,10 +439,10 @@ if __name__ == '__main__':
     write_to_nodes_gpus("./experiment/train_bc.sh", txt, n_nodes, n_gpus)
 
     txt = exp_test(dir_exp, obj="bc")
-    write_to_nodes_gpus("./experiment/test_bc.sh", txt, n_nodes, n_gpus)
+    write_to_nodes_gpus("./experiment/test_bc.sh", txt, n_nodes=14, n_gpus=4)
 
-    txt = exp_unroll(dir_exp, obj="bc")
-    write_to_nodes_gpus("./experiment/unroll_bc.sh", txt, n_nodes=8, n_gpus=4)
+    # txt = exp_unroll(dir_exp, obj="bc")
+    # write_to_nodes_gpus("./experiment/unroll_bc.sh", txt, n_nodes=8, n_gpus=4)
 
     # txt = exp_train(dir_exp, obj="wm")
     # write_to_nodes_gpus("./experiment/train_wm.sh", txt, n_nodes, n_gpus)

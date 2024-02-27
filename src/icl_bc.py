@@ -25,6 +25,7 @@ parser.add_argument("--name", type=str, default=None)
 # parser.add_argument("--env_id", type=str, default="CartPole-v1")
 parser.add_argument("--dataset_paths", type=str, nargs="+", default=[])
 parser.add_argument("--exclude_dataset_paths", type=str, nargs="+", default=[])
+parser.add_argument("--percent_dataset", type=float, default=1.0)
 parser.add_argument("--load_dir", type=str, default=None)
 parser.add_argument("--save_dir", type=str, default=None)
 parser.add_argument("--save_agent", type=lambda x: x == "True", default=False)
@@ -154,13 +155,18 @@ def main(args):
         with open(p, 'rb') as f:
             dataset = pickle.load(f)
         dataset = preprocess_dataset(dataset, d_obs_uni=d_obs_uni, n_acts_uni=n_acts_uni)
-        print(f"Dataset shape: {jax.tree_map(lambda x: x.shape, dataset)}")
+        print(f"Dataset i shape: {jax.tree_map(lambda x: x.shape, dataset)}")
         datasets.append(dataset)
     # dataset = util.tree_cat(datasets)
     dataset = {k: np.concatenate([d[k] for d in datasets], axis=0) for k in datasets[0].keys()}
+    rng = jax.random.PRNGKey(0)
+    idx_ds = jax.random.permutation(rng, len(dataset['obs']))
+    idx_ds = idx_ds[:int(len(idx_ds) * args.percent_dataset)]
+    dataset_small = jax.tree_map(lambda x: x[idx_ds], dataset)
 
     print("----------------------------")
-    print(f"Dataset shape: {jax.tree_map(lambda x: x.shape, dataset)}")
+    print(f"Full Dataset shape: {jax.tree_map(lambda x: x.shape, dataset)}")
+    print(f"Small Dataset shape: {jax.tree_map(lambda x: x.shape, dataset_small)}")
 
     rng = jax.random.PRNGKey(0)
     if args.obj == 'bc':
@@ -255,7 +261,7 @@ def main(args):
                 pickle.dump(dict(i_ckpt=i_ckpt, i_iter=i_iter, params=train_state.params), f)
 
         rng, _rng = split(rng)
-        batch = sample_batch_from_dataset(_rng, dataset, args.bs)
+        batch = sample_batch_from_dataset(_rng, dataset_small, args.bs)
         if args.n_augs > 0:
             n_augs = args.n_augs
             # n_augs = int(jnp.e ** ((jnp.log(args.n_augs) / args.n_iters) * i_iter))
