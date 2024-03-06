@@ -18,31 +18,43 @@ from agents.regular_transformer import BCTransformer, WMTransformer
 jax_config.update("jax_debug_nans", True)
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--entity", type=str, default=None)
-parser.add_argument("--project", type=str, default="synthetic-mdps")
-parser.add_argument("--name", type=str, default=None)
+# parser.add_argument("--entity", type=str, default=None)
+# parser.add_argument("--project", type=str, default="synthetic-mdps")
+# parser.add_argument("--name", type=str, default=None)
 
 # parser.add_argument("--env_id", type=str, default="CartPole-v1")
 parser.add_argument("--dataset_paths", type=str, nargs="+", default=[])
 parser.add_argument("--exclude_dataset_paths", type=str, nargs="+", default=[])
 parser.add_argument("--percent_dataset", type=float, default=1.0)
+
 parser.add_argument("--load_dir", type=str, default=None)
 parser.add_argument("--save_dir", type=str, default=None)
 parser.add_argument("--save_agent", type=lambda x: x == "True", default=False)
 parser.add_argument("--n_ckpts", type=int, default=0)
 
-parser.add_argument("--n_iters_eval", type=int, default=40)
+parser.add_argument("--n_iters_eval", type=int, default=500)
 parser.add_argument("--n_iters", type=int, default=10000)
 
 parser.add_argument("--n_augs", type=int, default=0)
+parser.add_argument("--p_same", type=float, default=0)
 parser.add_argument("--time_perm", type=lambda x: x == "True", default=False)
 
-parser.add_argument("--bs", type=int, default=256)
+parser.add_argument("--bs", type=int, default=64)
 # parser.add_argument("--mbs", type=int, default=256)
 parser.add_argument("--lr", type=float, default=2.5e-4)
 parser.add_argument("--clip_grad_norm", type=float, default=1.)
 
 parser.add_argument("--obj", type=str, default="bc")  # bc or wm
+
+# Model arguments
+group = parser.add_argument_group("model")
+group.add_argument("--n_layers", type=int, default=4)
+group.add_argument("--n_heads", type=int, default=8)
+group.add_argument("--d_embd", type=int, default=256)
+group.add_argument("--ctx_len", type=int, default=128)
+group.add_argument("--mask_type", type=str, default="causal")
+group.add_argument("--d_obs_uni", type=int, default=64)
+group.add_argument("--n_acts_uni", type=int, default=10)
 
 
 # parser.add_argument("--curriculum", type=str, default="none")
@@ -76,9 +88,7 @@ def preprocess_dataset(dataset, d_obs_uni, n_acts_uni):
     n_acts_extra = n_acts_uni - n_acts
 
     rng = jax.random.PRNGKey(0)
-    # obs_mat = jax.random.normal(rng, (d_obs_uni, d_obs)) * jnp.sqrt(1. / d_obs)
     obs_mat = jax.random.orthogonal(rng, n=max(d_obs, d_obs_uni), shape=())[:d_obs_uni, :d_obs]
-
     dataset['obs'] = dataset['obs'] @ obs_mat.T
     logits_extra = jnp.full((ds_size, T, n_acts_extra), -jnp.inf)
     dataset['logits'] = jnp.concatenate([dataset['logits'], logits_extra], axis=-1)
@@ -87,7 +97,10 @@ def preprocess_dataset(dataset, d_obs_uni, n_acts_uni):
     return dataset
 
 
-def augment_batch(rng, batch, n_augs, do_time_perm=False):
+def augment_batch(rng, batch, n_augs, p_same=0.0, do_time_perm=False):
+    if n_augs == 0:
+        return batch
+
     bs, T, d_obs = batch['obs'].shape
     _, _, n_acts = batch['logits'].shape
 
@@ -107,8 +120,8 @@ def augment_batch(rng, batch, n_augs, do_time_perm=False):
     rng, _rng = split(rng)
     aug_ids = jax.random.randint(_rng, (bs,), minval=0, maxval=n_augs)
     rng, _rng = split(rng)
-    mask = jax.random.uniform(_rng, (bs,)) < 0.10
-    aug_ids = jnp.where(mask, aug_ids, 0)
+    same_aug_mask = jax.random.uniform(_rng, (bs,)) < p_same
+    aug_ids = jnp.where(same_aug_mask, 0, aug_ids)
     return jax.vmap(augment_instance)(batch, aug_ids)
 
 
@@ -134,14 +147,18 @@ def sample_batch_from_datasets(rng, datasets, bs):
     return batch
 
 
+def save_pkl(save_dir, name, item):
+    if save_dir is not None:
+        os.makedirs(f"{save_dir}/", exist_ok=True)
+        with open(f"{save_dir}/{name}.pkl", 'wb') as f:
+            pickle.dump(item, f)
+
+
 def main(args):
     print(args)
     if args.n_ckpts > 0:
         assert args.n_iters % args.n_ckpts == 0
     # run = wandb.init(entity=args.entity, project=args.project, name=args.name, config=args)
-    d_obs_uni = 64
-    n_acts_uni = 18
-    T = 128
 
     include_paths = [os.path.abspath(p) for i in args.dataset_paths for p in glob.glob(i)]
     exclude_paths = [os.path.abspath(p) for i in args.exclude_dataset_paths for p in glob.glob(i)]
@@ -154,7 +171,7 @@ def main(args):
         print(f"Loading dataset from {p}")
         with open(p, 'rb') as f:
             dataset = pickle.load(f)
-        dataset = preprocess_dataset(dataset, d_obs_uni=d_obs_uni, n_acts_uni=n_acts_uni)
+        dataset = preprocess_dataset(dataset, d_obs_uni=args.d_obs_uni, n_acts_uni=args.n_acts_uni)
         print(f"Dataset i shape: {jax.tree_map(lambda x: x.shape, dataset)}")
         datasets.append(dataset)
     # dataset = util.tree_cat(datasets)
@@ -170,15 +187,17 @@ def main(args):
 
     rng = jax.random.PRNGKey(0)
     if args.obj == 'bc':
-        agent = BCTransformer(n_acts=n_acts_uni, n_layers=4, n_heads=8, d_embd=256, n_steps=T)
+        agent = BCTransformer(n_acts=args.n_acts_uni, n_layers=args.n_layers, n_heads=args.n_heads,
+                              d_embd=args.d_embd, n_steps=args.ctx_len, mask_type=args.mask_type)
     elif args.obj == 'wm':
-        agent = WMTransformer(n_acts=n_acts_uni, n_layers=4, n_heads=4, d_embd=64, n_steps=T, d_obs=d_obs_uni)
+        agent = WMTransformer(n_acts=args.n_acts_uni, n_layers=args.n_layers, n_heads=args.n_heads,
+                              d_embd=args.d_embd, n_steps=args.ctx_len, d_obs=args.d_obs_uni)
     else:
         raise NotImplementedError
 
     rng, _rng = split(rng)
     if args.load_dir is not None:
-        with open(f"{args.load_dir}/ckpt_final.pkl", 'rb') as f:
+        with open(f"{args.load_dir}/ckpt_final.pkl.pkl", 'rb') as f:
             ckpt = pickle.load(f)
             agent_params = ckpt['params']
     else:
@@ -232,69 +251,64 @@ def main(args):
         return train_state, metrics
 
     iter_eval, iter_step = jax.jit(iter_eval), jax.jit(iter_step)
-
-    if args.save_dir is not None:
-        os.makedirs(f"{args.save_dir}/", exist_ok=True)
-
     metrics_before, metrics_train, metrics_after = [], [], []
+    metrics_train_testset = []
 
+    # --------------------------- BEFORE TRAINING ---------------------------
     pbar = tqdm(range(args.n_iters_eval), desc="Before")
-    for i_iter in pbar:
-        rng, _rng = split(rng)
-        batch = sample_batch_from_dataset(_rng, dataset, args.bs)
-        if args.n_augs > 0:
-            rng, _rng = split(rng)
-            batch = augment_batch(_rng, batch, n_augs=args.n_augs, do_time_perm=args.time_perm)
+    for _ in pbar:
+        rng, _rng_batch, _rng_aug = split(rng, 3)
+        batch = sample_batch_from_dataset(_rng_batch, dataset, args.bs)
+        batch = augment_batch(_rng_aug, batch, n_augs=args.n_augs, p_same=0., do_time_perm=args.time_perm)
+
         train_state, metrics = iter_eval(train_state, batch)
         pbar.set_postfix(loss=metrics['loss'].item())
         metrics_before.append(metrics)
     metrics_before = util.tree_stack(metrics_before)
-    if args.save_dir is not None:
-        with open(f"{args.save_dir}/metrics_before.pkl", 'wb') as f:
-            pickle.dump(metrics_before, f)
+    save_pkl(args.save_dir, "metrics_before.pkl", metrics_before)
 
+    # --------------------------- TRAINING ---------------------------
     pbar = tqdm(range(args.n_iters), desc="Training")
     for i_iter in pbar:
         if args.n_ckpts > 0 and i_iter % (args.n_iters // args.n_ckpts) == 0:
             i_ckpt = i_iter // (args.n_iters // args.n_ckpts)
-            with open(f"{args.save_dir}/ckpt_{i_ckpt}.pkl", 'wb') as f:
-                pickle.dump(dict(i_ckpt=i_ckpt, i_iter=i_iter, params=train_state.params), f)
+            save_pkl(args.save_dir, f"ckpt_{i_ckpt}.pkl", dict(i_ckpt=i_ckpt, i_iter=i_iter, params=train_state.params))
 
-        rng, _rng = split(rng)
-        batch = sample_batch_from_dataset(_rng, dataset_small, args.bs)
-        if args.n_augs > 0:
-            n_augs = args.n_augs
-            # n_augs = int(jnp.e ** ((jnp.log(args.n_augs) / args.n_iters) * i_iter))
-            rng, _rng = split(rng)
-            batch = augment_batch(_rng, batch, n_augs=n_augs, do_time_perm=args.time_perm)
-        else:
-            n_augs = 0
+        rng, _rng_batch, _rng_aug = split(rng, 3)
+        batch = sample_batch_from_dataset(_rng_batch, dataset_small, args.bs)
+        batch = augment_batch(_rng_aug, batch, n_augs=args.n_augs, p_same=args.p_same, do_time_perm=args.time_perm)
         train_state, metrics = iter_step(train_state, batch)
-        pbar.set_postfix(loss=metrics['loss'].item(), n_augs=n_augs)
+        pbar.set_postfix(loss=metrics['loss'].item(), n_augs=args.n_augs)
         metrics_train.append(metrics)
 
-    metrics_train = util.tree_stack(metrics_train)
-    if args.save_dir is not None:
-        with open(f"{args.save_dir}/metrics_train.pkl", 'wb') as f:
-            pickle.dump(metrics_train, f)
+        if i_iter % 10 == 0:
+            batch = sample_batch_from_dataset(_rng_batch, dataset, args.bs)
+            batch = augment_batch(_rng_aug, batch, n_augs=args.n_augs, p_same=0., do_time_perm=args.time_perm)
+            train_state, metrics = iter_eval(train_state, batch)
+            metrics_train_testset.append(metrics)
 
+    metrics_train = util.tree_stack(metrics_train)
+    save_pkl(args.save_dir, "metrics_train.pkl", metrics_train)
+
+    metrics_train_testset = util.tree_stack(metrics_train_testset)
+    save_pkl(args.save_dir, "metrics_train_testset.pkl", metrics_train_testset)
+
+    # --------------------------- AFTER TRAINING ---------------------------
     pbar = tqdm(range(args.n_iters_eval), desc="After")
-    for i_iter in pbar:
-        rng, _rng = split(rng)
-        batch = sample_batch_from_dataset(_rng, dataset, args.bs)
-        if args.n_augs > 0:
-            rng, _rng = split(rng)
-            batch = augment_batch(_rng, batch, n_augs=args.n_augs, do_time_perm=args.time_perm)
+    for _ in pbar:
+        rng, _rng_batch, _rng_aug = split(rng, 3)
+        batch = sample_batch_from_dataset(_rng_batch, dataset, args.bs)
+        batch = augment_batch(_rng_aug, batch, n_augs=args.n_augs, p_same=0., do_time_perm=args.time_perm)
+
         train_state, metrics = iter_eval(train_state, batch)
         pbar.set_postfix(loss=metrics['loss'].item())
         metrics_after.append(metrics)
     metrics_after = util.tree_stack(metrics_after)
-    if args.save_dir is not None:
-        with open(f"{args.save_dir}/metrics_after.pkl", 'wb') as f:
-            pickle.dump(metrics_after, f)
-        if args.save_agent:
-            with open(f"{args.save_dir}/ckpt_final.pkl", 'wb') as f:
-                pickle.dump(dict(i_ckpt=args.n_ckpts, i_iter=args.n_iters, params=train_state.params), f)
+    save_pkl(args.save_dir, "metrics_after.pkl", metrics_after)
+    if args.save_agent:
+        save_pkl(args.save_dir, "ckpt_final.pkl",
+                 dict(i_ckpt=args.n_ckpts, i_iter=args.n_iters, params=train_state.params))
+    save_pkl(args.save_dir, "hi", 'hi')
 
 
 if __name__ == '__main__':
