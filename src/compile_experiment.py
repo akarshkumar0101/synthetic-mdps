@@ -4,7 +4,7 @@ import os
 import numpy as np
 
 import experiment_utils
-import icl_bc
+import icl_bc_ed
 import icl_gen
 import unroll
 
@@ -42,14 +42,14 @@ Transfer tasks:
 
 np.random.seed(1)
 envs_synthetic = []
-for i in range(4):
+for i in range(8):
     i_d, i_s, t_a, t_c, t_l, t_s, o_d, o_c, r_c = [np.random.randint(0, 5) for _ in range(9)]
     env_id = f"name=csmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_c={t_c};t_l={t_l};t_s={t_s};o_d={o_d};o_c={o_c};r_c={r_c};tl=64"
     envs_synthetic.append(env_id)
     env_id = f"name=csmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_c={t_c};t_l={t_l};t_s={t_s};o_d={o_d};o_c={o_c};r_c={r_c};tl=1"
     envs_synthetic.append(env_id)
 
-for i in range(4):
+for i in range(8):
     i_d, i_s, t_a, t_s, o_d = [np.random.randint(0, 5) for _ in range(5)]
     env_id = f"name=dsmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_s={t_s};o_d={o_d};tl=64"
     envs_synthetic.append(env_id)
@@ -94,7 +94,8 @@ envs_atari_57 = ["Alien", "Amidar", "Assault", "Asterix", "Asteroids", "Atlantis
 envs_atari_16 = ["Pong", "Breakout", "SpaceInvaders", "Asterix", "Amidar", "Freeway", "Boxing", "Jamesbond",
                  "Riverraid", "Hero", "Krull", "Tutankham", "Kangaroo", "MsPacman", "Defender", "BeamRider"]
 
-envs_test = envs_classic + envs_minatar
+envs_test = envs_classic
+# envs_test = envs_classic + envs_minatar
 # envs_test = envs_classic + envs_minatar + envs_atari_16 + envs_procgen
 
 dataset_dirs = {}
@@ -132,8 +133,8 @@ env_test2ft_steps = {
 #     return out
 
 
-def exp_train(dir_exp, obj="bc", n_augs=0, n_iters_eval=2000, n_iters=250000):
-    cfg_default = vars(icl_bc.parse_args())
+def exp_train(dir_exp, obj="bc", n_augs=0, n_iters_eval=100, n_iters=100000):
+    cfg_default = vars(icl_bc_ed.parse_args())
     # print(cfg_default)
 
     cfgs = []
@@ -145,7 +146,8 @@ def exp_train(dir_exp, obj="bc", n_augs=0, n_iters_eval=2000, n_iters=250000):
             dataset_paths=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/dataset.pkl",
             exclude_dataset_paths=None,
             save_dir=f"{dir_exp}/train_{obj}/{env_id}",
-            n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, save_agent=True, n_augs=n_augs,
+            n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, n_ckpts=5, n_augs=n_augs,
+            bs=64, ctx_len=1024,
         )
         cfgs.append(cfg)
     # ---------------- PRETRAINING ON TEST ENV ----------------
@@ -155,7 +157,8 @@ def exp_train(dir_exp, obj="bc", n_augs=0, n_iters_eval=2000, n_iters=250000):
             dataset_paths=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/dataset.pkl",
             exclude_dataset_paths=None,
             save_dir=f"{dir_exp}/train_{obj}/{env_id}",
-            n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, save_agent=True, n_augs=n_augs,
+            n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, n_ckpts=5, n_augs=n_augs,
+            bs=64, ctx_len=1024,
         )
         cfgs.append(cfg)
     # ---------------- PRETRAINING ON ALL TEST ENVS ----------------
@@ -164,7 +167,8 @@ def exp_train(dir_exp, obj="bc", n_augs=0, n_iters_eval=2000, n_iters=250000):
         dataset_paths=f"{dir_exp}/datasets/real/*/*/dataset.pkl",
         exclude_dataset_paths=None,
         save_dir=f"{dir_exp}/train_{obj}/all",
-        n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, save_agent=True, n_augs=n_augs,
+        n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, n_ckpts=5, n_augs=n_augs,
+        bs=64, ctx_len=1024,
     )
     cfgs.append(cfg)
     # ---------------- PRETRAINING ON N-1 ENVS ----------------
@@ -174,16 +178,17 @@ def exp_train(dir_exp, obj="bc", n_augs=0, n_iters_eval=2000, n_iters=250000):
             dataset_paths=f"{dir_exp}/datasets/real/*/*/dataset.pkl",
             exclude_dataset_paths=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/dataset.pkl",
             save_dir=f"{dir_exp}/train_{obj}/all-{env_id}",
-            n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, save_agent=True, n_augs=n_augs,
+            n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, n_ckpts=5, n_augs=n_augs,
+            bs=64, ctx_len=1024,
         )
         cfgs.append(cfg)
 
-    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_bc.py')
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_bc_ed.py')
     return txt
 
 
 def exp_test(dir_exp, obj="bc"):
-    cfg_default = vars(icl_bc.parse_args())
+    cfg_default = vars(icl_bc_ed.parse_args())
     # print(cfg_default)
     # lrs = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1]
     # lrs = [3e-4]
@@ -251,7 +256,7 @@ def exp_test(dir_exp, obj="bc"):
             )
             cfgs.append(cfg)
 
-    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_bc.py')
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_bc_ed.py')
     return txt
 
 
@@ -314,12 +319,12 @@ def exp_data_syn(dir_exp):
             n_seeds_seq=32,
             n_seeds_par=32,
             n_iters_train=100,
-            n_iters_eval=1,
+            n_iters_eval=16,
             lr=3e-4,
             save_dir=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/",
         )
         cfgs.append(cfg)
-    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen.py')
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen_ed.py')
     return txt
 
 
@@ -335,13 +340,13 @@ def exp_data_classic(dir_exp):
             n_seeds_seq=1,
             n_seeds_par=1,
             n_iters_train=4000,
-            n_iters_eval=1024,
+            n_iters_eval=2048,
             lr=3e-4,
-            best_of_n_experts=20,
+            best_of_n_experts=30,
             save_dir=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/",
         )
         cfgs.append(cfg)
-    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen.py')
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen_ed.py')
     return txt
 
 
@@ -361,13 +366,13 @@ def exp_data_minatar(dir_exp):
             n_updates=32,
             gamma=.999,
             n_iters_train=2000,
-            n_iters_eval=64,
+            n_iters_eval=128,
             lr=1e-3,
             best_of_n_experts=10,
             save_dir=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/",
         )
         cfgs.append(cfg)
-    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen.py')
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen_ed.py')
     return txt
 
 
@@ -447,7 +452,7 @@ if __name__ == '__main__':
     # txt = exp_data_procgen(dir_exp)
     # write_to_nodes_gpus("./experiment/data_procgen.sh", txt, n_nodes, n_gpus, txt_header=txt_header_procgen)
 
-    txt = exp_train(dir_exp, obj="bc", n_augs=int(1e9))
+    txt = exp_train(dir_exp, obj="bc", n_augs=int(1e6))
     write_to_nodes_gpus("./experiment/train_bc.sh", txt, n_nodes, n_gpus)
 
     txt = exp_test(dir_exp, obj="bc")

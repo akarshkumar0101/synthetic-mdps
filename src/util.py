@@ -1,3 +1,6 @@
+import os
+import pickle
+
 import jax
 import jax.numpy as jnp
 
@@ -39,3 +42,25 @@ def tree_cat(trees):
     grouped_leaves = zip(*leaves_list)
     result_leaves = [jnp.concatenate(l) for l in grouped_leaves]
     return treedef_list[0].unflatten(result_leaves)
+
+
+def save_pkl(save_dir, name, item):
+    if save_dir is not None:
+        os.makedirs(f"{save_dir}/", exist_ok=True)
+        with open(f"{save_dir}/{name}.pkl", 'wb') as f:
+            pickle.dump(item, f)
+
+
+def load_pkl(load_dir, name):
+    if load_dir is not None:
+        with open(f"{load_dir}/{name}.pkl", "rb") as f:
+            return pickle.load(f)
+    else:
+        return None
+
+
+def calc_entropy_stable(logits, axis=-1):
+    logits = jax.nn.log_softmax(logits, axis=axis)
+    probs = jnp.exp(logits)
+    logits = jnp.where(probs == 0, 0., logits)  # replace -inf with 0
+    return -(probs * logits).sum(axis=axis)
