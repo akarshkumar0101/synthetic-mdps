@@ -1,6 +1,9 @@
 import argparse
 import glob
 import os
+# print('CUDA_VISIBLE_DEVICES', os.environ['CUDA_VISIBLE_DEVICES'])
+# print('XLA_PYTHON_CLIENT_PREALLOCATE', os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'])
+# print('XLA_PYTHON_CLIENT_MEM_FRACTION', os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'])
 import pickle
 
 import flax.linen as nn
@@ -26,12 +29,13 @@ parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--load_dir", type=str, default=None)
 parser.add_argument("--save_dir", type=str, default=None)
 parser.add_argument("--n_ckpts", type=int, default=0)
-# parser.add_argument("--obj", type=str, default="bc")  # bc or wm
+parser.add_argument("--obj", type=str, default="bc")  # bc or wm
 
 group = parser.add_argument_group("data")
 group.add_argument("--dataset_paths", type=str, nargs="+", default=[])
 group.add_argument("--exclude_dataset_paths", type=str, nargs="+", default=[])
 group.add_argument("--percent_dataset", type=float, default=1.0)
+group.add_argument("--n_augs_test", type=int, default=0)
 group.add_argument("--n_augs", type=int, default=0)
 group.add_argument("--n_augs_obs", type=int, default=0)
 group.add_argument("--p_same_obs", type=float, default=0)
@@ -49,6 +53,7 @@ group.add_argument("--bs", type=int, default=64)
 group.add_argument("--mini_bs", type=int, default=None)
 group.add_argument("--lr", type=float, default=2.5e-4)
 group.add_argument("--lr_schedule", type=str, default="constant")  # constant or cosine_decay
+group.add_argument("--weight_decay", type=float, default=0.)
 group.add_argument("--clip_grad_norm", type=float, default=1.)
 
 group = parser.add_argument_group("model")
@@ -122,6 +127,7 @@ def construct_dataset(include_paths, exclude_paths, d_obs_uni, n_acts_uni):
     exclude_paths = [os.path.abspath(p) for i in exclude_paths for p in glob.glob(i)]
     paths = sorted(set(include_paths) - set(exclude_paths))
     print(f"Found {len(paths)} datasets")
+    assert len(paths) > 0
     datasets = []
     for p in paths:
         print(f"Loading dataset from {p}")
@@ -131,8 +137,18 @@ def construct_dataset(include_paths, exclude_paths, d_obs_uni, n_acts_uni):
         dataset = preprocess_dataset(dataset, d_obs_uni=d_obs_uni, n_acts_uni=n_acts_uni)
         datasets.append(dataset)
     dataset = {k: np.concatenate([d[k] for d in datasets], axis=0) for k in datasets[0].keys()}
-    dataset = jax.tree_map(lambda x: np.asarray(x), dataset)
+    dataset = jax.tree_map(lambda x: np.array(x), dataset)
     return dataset
+
+
+def train_test_split(rng, dataset, percent_train=0.8):
+    n = len(dataset['obs'])
+    n_train = int(n * percent_train)
+    idx = jax.random.permutation(rng, n)
+    idx_train, idx_test = idx[:n_train], idx[n_train:]
+    dataset_train = jax.tree_map(lambda x: x[idx_train], dataset)
+    dataset_test = jax.tree_map(lambda x: x[idx_test], dataset)
+    return dataset_train, dataset_test
 
 
 # def subsample_dataset(rng, dataset, percent_dataset=1.0):
@@ -227,37 +243,32 @@ def main(args):
     rng = jax.random.PRNGKey(args.seed)
     # run = wandb.init(entity=args.entity, project=args.project, name=args.name, config=args)
 
-    dataset = construct_dataset(args.dataset_paths, args.exclude_dataset_paths, args.d_obs_uni, args.n_acts_uni)
-
-    rng, _rng = split(rng)
-    idx_ds = jax.random.permutation(_rng, len(dataset['obs']))
-    idx_ds = idx_ds[:int(len(idx_ds) * args.percent_dataset)]
-    dataset_small = jax.tree_map(lambda x: x[idx_ds], dataset)
-
-    # dataset = jax.tree_map(lambda x: x[:512], dataset)
-    # dataset_small = dataset
+    dataset_all = construct_dataset(args.dataset_paths, args.exclude_dataset_paths, args.d_obs_uni, args.n_acts_uni)
+    dataset_train, dataset_test = train_test_split(jax.random.PRNGKey(0), dataset_all, percent_train=0.8)
+    dataset_train, _ = train_test_split(jax.random.PRNGKey(0), dataset_train, percent_train=args.percent_dataset)
 
     print("----------------------------")
-    print(f"Full Dataset shape: {jax.tree_map(lambda x: x.shape, dataset)}")
-    print(f"Small Dataset shape: {jax.tree_map(lambda x: x.shape, dataset_small)}")
-    dataset, dataset_small = jax.tree_map(lambda x: np.array(x), (dataset, dataset_small))
+    print(f"Train Dataset shape: {jax.tree_map(lambda x: x.shape, dataset_train)}")
+    print(f"Test Dataset shape: {jax.tree_map(lambda x: x.shape, dataset_test)}")
+    print(f"Train Dataset types: {jax.tree_map(lambda x: type(x), dataset_train)}")
+    print(f"Test Dataset types: {jax.tree_map(lambda x: type(x), dataset_test)}")
 
     agent = BCTransformer(n_acts=args.n_acts_uni, n_layers=args.n_layers, n_heads=args.n_heads,
                           d_embd=args.d_embd, n_steps=args.ctx_len, mask_type=args.mask_type)
 
     rng, _rng = split(rng)
     if args.load_dir is not None:
-        agent_params = load_pkl(args.load_dir, "ckpt_final")['params']
+        agent_params = load_pkl(args.load_dir, "ckpt_0080000")['params']
     else:
         # batch = sample_batch_from_datasets(rng, datasets, 1)
-        batch = sample_batch_from_dataset(rng, dataset, 1, args.ctx_len)
+        batch = sample_batch_from_dataset(rng, dataset_train, 1, args.ctx_len)
         # batch = augment_batch(rng, batch, n_augs=1, do_time_perm=False)
         batch = augment_batch(rng, batch, 1, 0., 1, 0., 1, 0.)
         batch = jax.tree_map(lambda x: x[0], batch)
         agent_params = agent.init(_rng, batch['obs'], batch['act'])
     print("Agent parameter count: ", sum(p.size for p in jax.tree_util.tree_leaves(agent_params)))
     tabulate_fn = nn.tabulate(agent, jax.random.key(0), compute_flops=True, compute_vjp_flops=True)
-    batch = sample_batch_from_dataset(rng, dataset, args.bs, args.ctx_len)
+    batch = sample_batch_from_dataset(rng, dataset_train, args.bs, args.ctx_len)
     batch = jax.tree_map(lambda x: x[0], (batch['obs'], batch['act']))
     print(tabulate_fn(*batch))
 
@@ -270,7 +281,8 @@ def main(args):
         lr_schedule = optax.join_schedules([lr_warmup, lr_decay], [args.n_iters // 100])
     else:
         raise NotImplementedError
-    tx = optax.chain(optax.clip_by_global_norm(args.clip_grad_norm), optax.adam(lr_schedule, eps=1e-8))
+    tx = optax.chain(optax.clip_by_global_norm(args.clip_grad_norm),
+                     optax.adamw(lr_schedule, weight_decay=args.weight_decay, eps=1e-8))
     train_state = TrainState.create(apply_fn=agent.apply, params=agent_params, tx=tx)
 
     def loss_fn(agent_params, batch):
@@ -300,14 +312,14 @@ def main(args):
 
     def sample_test_batch(rng):
         rng, _rng_batch, _rng_aug = split(rng, 3)
-        batch = sample_batch_from_dataset(_rng_batch, dataset, args.bs, args.ctx_len)
+        batch = sample_batch_from_dataset(_rng_batch, dataset_test, args.bs, args.ctx_len)
         # batch = augment_batch(_rng_aug, batch, 1000000, 0., False, False)
-        batch = augment_batch(_rng_aug, batch, 1000000, 0., 1000000, 0., 0, 0.)
+        batch = augment_batch(_rng_aug, batch, args.n_augs_test, 0, args.n_augs_test, 0, 0, 0.)
         return rng, batch
 
     def sample_train_batch(rng):
         rng, _rng_batch, _rng_aug = split(rng, 3)
-        batch = sample_batch_from_dataset(_rng_batch, dataset_small, args.bs, args.ctx_len)
+        batch = sample_batch_from_dataset(_rng_batch, dataset_train, args.bs, args.ctx_len)
         # batch = augment_batch(_rng_aug, batch, args.n_augs, args.p_same, args.time_perm, args.zipf)
         batch = augment_batch(_rng_aug, batch,
                               args.n_augs_obs, args.p_same_obs,
@@ -324,34 +336,35 @@ def main(args):
         train_state, metrics = iter_test(train_state, batch)
         pbar.set_postfix(loss=metrics['loss'].item())
         metrics_before.append(metrics)
-    metrics_before = tree_stack(metrics_before)
-    save_pkl(args.save_dir, "metrics_before", metrics_before)
+    save_pkl(args.save_dir, "metrics_before", tree_stack(metrics_before))
 
     # --------------------------- TRAINING ---------------------------
     pbar = tqdm(range(args.n_iters), desc="Training")
     for i_iter in pbar:
         if (args.n_ckpts - 1) > 0 and i_iter % (args.n_iters // (args.n_ckpts - 1)) == 0:
             save_pkl(args.save_dir, f"ckpt_{i_iter:07d}", dict(i_iter=i_iter, params=train_state.params))
-            os.symlink(f"{args.save_dir}/ckpt_{i_iter:07d}.pkl", f"{args.save_dir}/ckpt_latest.pkl")
+            # if os.path.exists(f"{args.save_dir}/ckpt_latest.pkl"):
+            #     os.remove(f"{args.save_dir}/ckpt_latest.pkl")
+            # os.symlink(f"{args.save_dir}/ckpt_{i_iter:07d}.pkl", f"{args.save_dir}/ckpt_latest.pkl")
 
         rng, batch = sample_train_batch(rng)
         train_state, metrics = iter_train(train_state, batch)
         pbar.set_postfix(loss=metrics['loss'].item())
 
-        if i_iter % 20 == 0:
+        if i_iter % 10 == 0:
             metrics_train.append(metrics)
             rng, batch = sample_test_batch(rng)
             train_state, metrics = iter_test(train_state, batch)
             metrics_test.append(metrics)
+        if i_iter % 1000 == 0 or i_iter == args.n_iters - 1:
+            save_pkl(args.save_dir, "metrics_train", tree_stack(metrics_train))
+            save_pkl(args.save_dir, "metrics_test", tree_stack(metrics_test))
 
     if args.n_ckpts > 0 and args.save_dir is not None:
-        save_pkl(args.save_dir, f"ckpt_{args.n_iters:7d}", dict(i_iter=args.n_iters, params=train_state.params))
-        os.symlink(f"{args.save_dir}/ckpt_{args.n_iters:07d}.pkl", f"{args.save_dir}/ckpt_latest.pkl")
-
-    metrics_train = tree_stack(metrics_train)
-    save_pkl(args.save_dir, "metrics_train", metrics_train)
-    metrics_test = tree_stack(metrics_test)
-    save_pkl(args.save_dir, "metrics_test", metrics_test)
+        save_pkl(args.save_dir, f"ckpt_{args.n_iters:07d}", dict(i_iter=args.n_iters, params=train_state.params))
+        # if os.path.exists(f"{args.save_dir}/ckpt_latest.pkl"):
+        #     os.remove(f"{args.save_dir}/ckpt_latest.pkl")
+        # os.symlink(f"{args.save_dir}/ckpt_{args.n_iters:07d}.pkl", f"{args.save_dir}/ckpt_latest.pkl")
 
     # --------------------------- AFTER TRAINING ---------------------------
     pbar = tqdm(range(args.n_iters_eval), desc="After Training")
@@ -360,8 +373,7 @@ def main(args):
         train_state, metrics = iter_test(train_state, batch)
         pbar.set_postfix(loss=metrics['loss'].item())
         metrics_after.append(metrics)
-    metrics_after = tree_stack(metrics_after)
-    save_pkl(args.save_dir, "metrics_after", metrics_after)
+    save_pkl(args.save_dir, "metrics_after", tree_stack(metrics_after))
 
 
 if __name__ == '__main__':

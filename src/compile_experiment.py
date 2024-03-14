@@ -42,14 +42,14 @@ Transfer tasks:
 
 np.random.seed(1)
 envs_synthetic = []
-for i in range(8):
+for i in range(4):
     i_d, i_s, t_a, t_c, t_l, t_s, o_d, o_c, r_c = [np.random.randint(0, 5) for _ in range(9)]
     env_id = f"name=csmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_c={t_c};t_l={t_l};t_s={t_s};o_d={o_d};o_c={o_c};r_c={r_c};tl=64"
     envs_synthetic.append(env_id)
     env_id = f"name=csmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_c={t_c};t_l={t_l};t_s={t_s};o_d={o_d};o_c={o_c};r_c={r_c};tl=1"
     envs_synthetic.append(env_id)
 
-for i in range(8):
+for i in range(4):
     i_d, i_s, t_a, t_s, o_d = [np.random.randint(0, 5) for _ in range(5)]
     env_id = f"name=dsmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_s={t_s};o_d={o_d};tl=64"
     envs_synthetic.append(env_id)
@@ -65,17 +65,17 @@ for i in range(8):
 # envs_synthetic += ['zero_act']
 
 envs_classic = [
-    "name=CartPole-v1",
-    "name=Acrobot-v1",
-    "name=MountainCar-v0",
-    "name=DiscretePendulum-v1",
+    "name=CartPole-v1;tl=500",
+    "name=Acrobot-v1;tl=500",
+    "name=MountainCar-v0;tl=500",
+    "name=DiscretePendulum-v1;tl=500",
 ]
 
 envs_minatar = [
-    "name=Asterix-MinAtar",
-    "name=Breakout-MinAtar",
-    "name=Freeway-MinAtar",
-    "name=SpaceInvaders-MinAtar",
+    "name=Asterix-MinAtar;tl=500",
+    "name=Breakout-MinAtar;tl=500",
+    "name=Freeway-MinAtar;tl=500",
+    "name=SpaceInvaders-MinAtar;tl=500",
 ]
 
 envs_train = envs_synthetic
@@ -94,8 +94,8 @@ envs_atari_57 = ["Alien", "Amidar", "Assault", "Asterix", "Asteroids", "Atlantis
 envs_atari_16 = ["Pong", "Breakout", "SpaceInvaders", "Asterix", "Amidar", "Freeway", "Boxing", "Jamesbond",
                  "Riverraid", "Hero", "Krull", "Tutankham", "Kangaroo", "MsPacman", "Defender", "BeamRider"]
 
-envs_test = envs_classic
-# envs_test = envs_classic + envs_minatar
+# envs_test = envs_classic
+envs_test = envs_classic + envs_minatar
 # envs_test = envs_classic + envs_minatar + envs_atari_16 + envs_procgen
 
 dataset_dirs = {}
@@ -133,7 +133,7 @@ env_test2ft_steps = {
 #     return out
 
 
-def exp_train(dir_exp, obj="bc", n_augs=0, n_iters_eval=100, n_iters=100000):
+def exp_train(dir_exp, obj="bc", n_augs=0, n_iters_eval=100, n_iters=80000):
     cfg_default = vars(icl_bc_ed.parse_args())
     # print(cfg_default)
 
@@ -195,12 +195,13 @@ def exp_test(dir_exp, obj="bc"):
     # percent_datas = [0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0]
     # percent_datas = [0.00025]
     lrs_pds = []
-    for lr in [3e-4, 1e-3, 3e-3, 1e-2, 3e-2]:
+    # for lr in [3e-4, 1e-3, 3e-3, 1e-2, 3e-2]:
+    for lr in [3e-4]:
         lrs_pds.append((lr, 1.0))
-    for pd in [0.00025, 0.001, 0.01, 0.1]:
-        lrs_pds.append((3e-4, pd))
+    # for pd in [0.00025, 0.001, 0.01, 0.1]:
+    #     lrs_pds.append((3e-4, pd))
 
-    n_iters_eval = 2000
+    n_iters_eval = 200
     n_augs = 0
 
     cfgs = []
@@ -340,9 +341,10 @@ def exp_data_classic(dir_exp):
             n_seeds_seq=1,
             n_seeds_par=1,
             n_iters_train=4000,
-            n_iters_eval=2048,
+            n_envs=128,
+            n_iters_eval=64,
             lr=3e-4,
-            best_of_n_experts=30,
+            best_of_n_experts=50,
             save_dir=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/",
         )
         cfgs.append(cfg)
@@ -361,12 +363,12 @@ def exp_data_minatar(dir_exp):
             agent_id="minatar",
             n_seeds_seq=1,
             n_seeds_par=1,
-            n_envs=64,
+            n_envs=128,
             n_envs_batch=8,
             n_updates=32,
             gamma=.999,
             n_iters_train=2000,
-            n_iters_eval=128,
+            n_iters_eval=64,
             lr=1e-3,
             best_of_n_experts=10,
             save_dir=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/",
