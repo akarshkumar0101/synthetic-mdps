@@ -13,14 +13,6 @@ import tyro
 from torch.distributions.normal import Normal
 from torch.utils.tensorboard import SummaryWriter
 
-import envpool
-
-# for env in envpool.list_all_envs():
-#     print(env)
-# print()
-for env in gym.registry:
-    print(env)
-print()
 
 @dataclass
 class Args:
@@ -110,33 +102,6 @@ def make_env(env_id, idx, capture_video, run_name, gamma):
 
     return thunk
 
-def make_envpool(env_id, num_envs, gamma, seed=0):
-    env = envpool.make_gymnasium(env_id, num_envs=num_envs, seed=seed)
-    env.is_vector_env = True
-    env.num_envs = num_envs
-    env.single_observation_space = env.observation_space
-    env.single_action_space = env.action_space
-
-    class Envpool2Gymnasium(gym.Wrapper):
-        def reset(self, **kwargs):
-            return self.env.reset()
-
-    class BatchFlattenObservation(gym.ObservationWrapper):
-        def observation(self, observation):
-            bs, *_ = observation.shape
-            return observation.reshape(bs, -1)
-
-    env = Envpool2Gymnasium(env)
-
-    env = BatchFlattenObservation(env)  # deal with dm_control's Dict observation space
-    env = gym.wrappers.RecordEpisodeStatistics(env)
-    env = gym.wrappers.ClipAction(env)
-    env = gym.wrappers.NormalizeObservation(env)
-    env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
-    env = gym.wrappers.NormalizeReward(env, gamma=gamma)
-    env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
-    return env
-
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
@@ -209,15 +174,9 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # env setup
-    use_envpool = False
-    if use_envpool:
-        envs = make_envpool(args.env_id, args.num_envs, args.gamma, seed=args.seed)
-        print(envs.single_observation_space, envs.single_action_space)
-    else:
-        envs = gym.vector.SyncVectorEnv(
-            [make_env(args.env_id, i, args.capture_video, run_name, args.gamma) for i in range(args.num_envs)]
-        )
-        print(envs.single_observation_space, envs.single_action_space)
+    envs = gym.vector.SyncVectorEnv(
+        [make_env(args.env_id, i, args.capture_video, run_name, args.gamma) for i in range(args.num_envs)]
+    )
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
     agent = Agent(envs).to(device)
