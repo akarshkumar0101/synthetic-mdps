@@ -79,6 +79,8 @@ class Args:
     num_iterations: int = 0
     """the number of iterations (computed in runtime)"""
 
+    save_dir: str = None
+
 
 class RecordEpisodeStatistics(gym.Wrapper):
     def __init__(self, env, deque_size=100):
@@ -214,6 +216,8 @@ if __name__ == "__main__":
     next_obs = torch.Tensor(envs.reset()).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
 
+    train_stats = dict(global_step=[], episode_return=[], episode_length=[])
+
     for iteration in range(1, args.num_iterations + 1):
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
@@ -245,6 +249,9 @@ if __name__ == "__main__":
                     writer.add_scalar("charts/avg_episodic_return", np.average(avg_returns), global_step)
                     writer.add_scalar("charts/episodic_return", info["r"][idx], global_step)
                     writer.add_scalar("charts/episodic_length", info["l"][idx], global_step)
+                    train_stats["global_step"].append(global_step)
+                    train_stats["episode_return"].append(info["r"][idx])
+                    train_stats["episode_length"].append(info["l"][idx])
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -339,6 +346,15 @@ if __name__ == "__main__":
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+
+    if args.save_dir is not None:
+        args.save_dir = os.path.abspath(os.path.expanduser(args.save_dir))
+        print(f"Saving to {args.save_dir}")
+        os.makedirs(args.save_dir, exist_ok=True)
+        torch.save(agent.state_dict(), f"{args.save_dir}/model.pth")
+        import pickle
+        with open(f"{args.save_dir}/train_stats.pkl", "wb") as f:
+            pickle.dump(train_stats, f)
 
     envs.close()
     writer.close()

@@ -79,6 +79,8 @@ class Args:
     num_iterations: int = 0
     """the number of iterations (computed in runtime)"""
 
+    save_dir: str = None
+
 
 def make_env(env_id, idx, capture_video, run_name, gamma):
     def thunk():
@@ -141,7 +143,7 @@ class Agent(nn.Module):
             action_mean = action_mean + z
             probs = Normal(action_mean, action_std)
 
-        return action, probs.log_prob(action).sum(1), probs.entropy().sum(1), self.critic(x)
+        return action, probs.log_prob(action).sum(1), probs.entropy().sum(1), self.critic(x), action_mean
 
 
 if __name__ == "__main__":
@@ -201,6 +203,8 @@ if __name__ == "__main__":
     next_done = torch.zeros(args.num_envs).to(device)
     num_updates = args.total_timesteps // args.batch_size
 
+    train_stats = dict(global_step=[], episode_return=[], episode_length=[])
+
     for update in range(1, num_updates + 1):
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
@@ -215,7 +219,7 @@ if __name__ == "__main__":
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
-                action, logprob, _, value = agent.get_action_and_value(next_obs)
+                action, logprob, _, value, _ = agent.get_action_and_value(next_obs)
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
@@ -232,6 +236,9 @@ if __name__ == "__main__":
                         print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
                         writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                         writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
+                        train_stats["global_step"].append(global_step)
+                        train_stats["episode_return"].append(info["episode"]["r"])
+                        train_stats["episode_length"].append(info["episode"]["l"])
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -266,7 +273,7 @@ if __name__ == "__main__":
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
 
-                _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions[mb_inds])
+                _, newlogprob, entropy, newvalue, _ = agent.get_action_and_value(b_obs[mb_inds], b_actions[mb_inds])
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
 
@@ -327,6 +334,19 @@ if __name__ == "__main__":
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+
+    if args.save_dir is not None:
+        args.save_dir = os.path.abspath(os.path.expanduser(args.save_dir))
+        print(f"Saving to {args.save_dir}")
+        os.makedirs(args.save_dir, exist_ok=True)
+        torch.save(agent.state_dict(), f"{args.save_dir}/model.pth")
+        import pickle
+        with open(f"{args.save_dir}/train_stats.pkl", "wb") as f:
+            pickle.dump(train_stats, f)
+        with open(f"{args.save_dir}/env_obs_rms.pkl", "wb") as f:
+            mean = np.stack([env.obs_rms.mean for env in envs.envs]).mean(axis=0)
+            var = np.stack([env.obs_rms.var for env in envs.envs]).mean(axis=0)
+            pickle.dump(dict(mean=mean, var=var), f)
 
     envs.close()
     writer.close()

@@ -97,6 +97,8 @@ class Args:
     aux_batch_rollouts: int = 0
     """the number of rollouts in the auxiliary phase (computed in runtime)"""
 
+    save_dir: str = None
+
 
 def layer_init_normed(layer, norm_dim, scale=1.0):
     with torch.no_grad():
@@ -197,7 +199,7 @@ class Agent(nn.Module):
         probs = Categorical(logits=logits)
         if action is None:
             action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy(), self.critic(hidden.detach())
+        return action, probs.log_prob(action), probs.entropy(), self.critic(hidden.detach()), logits
 
     def get_value(self, x):
         return self.critic(self.network(x.permute((0, 3, 1, 2)) / 255.0))  # "bhwc" -> "bchw"
@@ -282,6 +284,8 @@ if __name__ == "__main__":
     next_obs = torch.Tensor(envs.reset()).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
 
+    train_stats = dict(global_step=[], episode_return=[], episode_length=[])
+
     for phase in range(1, args.num_phases + 1):
 
         # POLICY PHASE
@@ -299,7 +303,7 @@ if __name__ == "__main__":
 
                 # ALGO LOGIC: action logic
                 with torch.no_grad():
-                    action, logprob, _, value = agent.get_action_and_value(next_obs)
+                    action, logprob, _, value, _ = agent.get_action_and_value(next_obs)
                     values[step] = value.flatten()
                 actions[step] = action
                 logprobs[step] = logprob
@@ -314,6 +318,9 @@ if __name__ == "__main__":
                         print(f"global_step={global_step}, episodic_return={item['episode']['r']}")
                         writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step)
                         writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
+                        train_stats["global_step"].append(global_step)
+                        train_stats["episode_return"].append(item["episode"]["r"])
+                        train_stats["episode_length"].append(item["episode"]["l"])
                         break
 
             # bootstrap value if not done
@@ -353,7 +360,7 @@ if __name__ == "__main__":
                     end = start + args.minibatch_size
                     mb_inds = b_inds[start:end]
 
-                    _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
+                    _, newlogprob, entropy, newvalue, _ = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
                     logratio = newlogprob - b_logprobs[mb_inds]
                     ratio = logratio.exp()
 
@@ -475,6 +482,15 @@ if __name__ == "__main__":
         writer.add_scalar("losses/aux/kl_loss", kl_loss.mean().item(), global_step)
         writer.add_scalar("losses/aux/aux_value_loss", aux_value_loss.item(), global_step)
         writer.add_scalar("losses/aux/real_value_loss", real_value_loss.item(), global_step)
+
+    if args.save_dir is not None:
+        args.save_dir = os.path.abspath(os.path.expanduser(args.save_dir))
+        print(f"Saving to {args.save_dir}")
+        os.makedirs(args.save_dir, exist_ok=True)
+        torch.save(agent.state_dict(), f"{args.save_dir}/model.pth")
+        import pickle
+        with open(f"{args.save_dir}/train_stats.pkl", "wb") as f:
+            pickle.dump(train_stats, f)
 
     envs.close()
     writer.close()

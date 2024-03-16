@@ -94,6 +94,20 @@ envs_atari_57 = ["Alien", "Amidar", "Assault", "Asterix", "Asteroids", "Atlantis
 envs_atari_16 = ["Pong", "Breakout", "SpaceInvaders", "Asterix", "Amidar", "Freeway", "Boxing", "Jamesbond",
                  "Riverraid", "Hero", "Krull", "Tutankham", "Kangaroo", "MsPacman", "Defender", "BeamRider"]
 
+envs_mujoco = ["Reacher", "Pusher", "InvertedPendulum", "InvertedDoublePendulum", "HalfCheetah", "Hopper", "Swimmer",
+               "Walker2d", "Ant", "Humanoid", "HumanoidStandup"]
+
+envs_dm_control = ["acrobot-swingup", "acrobot-swingup_sparse", "ball_in_cup-catch", "cartpole-balance",
+                   "cartpole-balance_sparse", "cartpole-swingup", "cartpole-swingup_sparse", "cartpole-two_poles",
+                   "cartpole-three_poles", "cheetah-run", "dog-stand", "dog-walk", "dog-trot", "dog-run", "dog-fetch",
+                   "finger-spin", "finger-turn_easy", "finger-turn_hard", "fish-upright", "fish-swim", "hopper-stand",
+                   "hopper-hop", "humanoid-stand", "humanoid-walk", "humanoid-run", "humanoid-run_pure_state",
+                   "humanoid_CMU-stand", "humanoid_CMU-walk", "humanoid_CMU-run", "manipulator-bring_ball",
+                   "manipulator-bring_peg", "manipulator-insert_ball", "manipulator-insert_peg", "pendulum-swingup",
+                   "point_mass-easy", "point_mass-hard", "quadruped-walk", "quadruped-run", "quadruped-escape",
+                   "quadruped-fetch", "reacher-easy", "reacher-hard", "stacker-stack_2", "stacker-stack_4",
+                   "swimmer-swimmer6", "swimmer-swimmer15", "walker-stand", "walker-walk", "walker-run", ]
+
 # envs_test = envs_classic
 envs_test = envs_classic + envs_minatar
 # envs_test = envs_classic + envs_minatar + envs_atari_16 + envs_procgen
@@ -437,11 +451,61 @@ def write_to_nodes_gpus(file, txt, n_nodes=1, n_gpus=1, txt_header=txt_header_ma
             f.write(txt_node)
 
 
+def create_agent_atari(dir_exp):
+    cfgs = []
+    for env_id in envs_atari_57:
+        cfg = dict(env_id=f"{env_id}-v5", save_dir=f"{dir_exp}/datasets/atari/{env_id}/")
+        cfgs.append(cfg)
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, python_command='python cleanrl/ppo_atari_envpool.py')
+    return txt
+
+
+def create_agent_procgen(dir_exp):
+    cfgs = []
+    for env_id in envs_procgen:
+        cfg = dict(env_id=f"{env_id}", save_dir=f"{dir_exp}/datasets/procgen/{env_id}/")
+        cfgs.append(cfg)
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, python_command='python cleanrl/ppg_procgen.py')
+    return txt
+
+
+def create_agent_mujoco(dir_exp):
+    cfgs = []
+    for env_id in envs_mujoco:
+        rpo_alpha = 0.5
+        if env_id in ["Ant", "HalfCheetah", "Hopper", "InvertedDoublePendulum", "Reacher", "Swimmer", "Pusher"]:
+            rpo_alpha = 0.01
+        cfg = dict(env_id=f"{env_id}-v4", save_dir=f"{dir_exp}/datasets/mujoco/{env_id}/", rpo_alpha=rpo_alpha)
+        cfgs.append(cfg)
+    txt = experiment_utils.create_command_txt_from_configs(cfgs,
+                                                           python_command='python cleanrl/rpo_continuous_action.py')
+    return txt
+
+
+def create_agent_dm_control(dir_exp):
+    cfgs = []
+    for env_id in envs_dm_control:
+        cfg = dict(env_id=f"dm_control/{env_id}-v0", save_dir=f"{dir_exp}/datasets/dm_control/{env_id}/")
+        cfgs.append(cfg)
+    txt = experiment_utils.create_command_txt_from_configs(cfgs,
+                                                           python_command='python cleanrl/rpo_continuous_action.py')
+    return txt
+
+
 if __name__ == '__main__':
-    dir_exp = "../data/exp_icl/"
+    dir_exp = "/data/vision/phillipi/akumar01/synthetic-mdps-data"
     n_nodes, n_gpus = 2, 8
     os.system("rm -rf ./experiment/")
     os.makedirs("./experiment/", exist_ok=True)
+
+    with open("./experiment/create_agent_atari.sh", "w") as f:
+        f.write(create_agent_atari(dir_exp))
+    with open("./experiment/create_agent_procgen.sh", "w") as f:
+        f.write(create_agent_procgen(dir_exp))
+    with open("./experiment/create_agent_mujoco.sh", "w") as f:
+        f.write(create_agent_mujoco(dir_exp))
+    with open("./experiment/create_agent_dm_control.sh", "w") as f:
+        f.write(create_agent_dm_control(dir_exp))
 
     txt = exp_data_syn(dir_exp)
     write_to_nodes_gpus("./experiment/data_syn.sh", txt, n_nodes, n_gpus)
