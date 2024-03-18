@@ -49,7 +49,7 @@ class Args:
     """total timesteps of the experiments"""
     learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
-    num_envs: int = 32
+    num_envs: int = 64
     """the number of parallel game environments"""
     num_steps: int = 4096
     """the number of steps to run in each environment per policy rollout"""
@@ -88,7 +88,9 @@ class Args:
     num_iterations: int = 0
     """the number of iterations (computed in runtime)"""
 
-    save_dir: str = "/data/vision/phillipi/akumar01/synthetic-mdps-data/datasets_old/mujoco/HalfCheetah"
+    load_dir: str = None
+    save_dir: str = None
+    vector_env: str = "async"
 
 
 def make_env(env_id, idx, capture_video, run_name, gamma):
@@ -112,8 +114,9 @@ def make_env(env_id, idx, capture_video, run_name, gamma):
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
-    assert args.save_dir is not None
+    assert args.save_dir is not None and args.load_dir is not None
     args.save_dir = os.path.abspath(os.path.expanduser(args.save_dir))
+    args.load_dir = os.path.abspath(os.path.expanduser(args.load_dir))
 
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
@@ -146,27 +149,28 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # env setup
-    envs = gym.vector.AsyncVectorEnv(
+    vector_env = gym.vector.AsyncVectorEnv if args.vector_env == "async" else gym.vector.SyncVectorEnv
+    envs = vector_env(
         [make_env(args.env_id, i, args.capture_video, run_name, args.gamma) for i in range(args.num_envs)]
     )
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
-    with open(f"{args.save_dir}/env_obs_rms.pkl", "rb") as f:
+    with open(f"{args.load_dir}/env_obs_rms.pkl", "rb") as f:
         env_obs_rms = pickle.load(f)
     obs_mean, obs_var = torch.Tensor(env_obs_rms["mean"]).to(device), torch.Tensor(env_obs_rms["var"]).to(device)
 
     agent = Agent(envs, args.rpo_alpha).to(device)
-    agent.load_state_dict(torch.load(f"{args.save_dir}/model.pth"))
+    agent.load_state_dict(torch.load(f"{args.load_dir}/model.pth"))
 
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # ALGO Logic: Storage setup
-    obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
-    actions = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
-    actions_means = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
-    logprobs = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    values = torch.zeros((args.num_steps, args.num_envs)).to(device)
+    obs = np.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape)
+    actions = np.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape)
+    actions_means = np.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape)
+    logprobs = np.zeros((args.num_steps, args.num_envs))
+    rewards = np.zeros((args.num_steps, args.num_envs))
+    dones = np.zeros((args.num_steps, args.num_envs))
+    values = np.zeros((args.num_steps, args.num_envs))
 
     # TRY NOT TO MODIFY: start the game
     global_step = 0
@@ -181,22 +185,22 @@ if __name__ == "__main__":
     pbar = tqdm(range(0, args.num_steps))
     for step in pbar:
         global_step += 1 * args.num_envs
-        obs[step] = next_obs
-        dones[step] = next_done
+        obs[step] = next_obs.cpu().numpy()
+        dones[step] = next_done.cpu().numpy()
 
         # ALGO LOGIC: action logic
         with torch.no_grad():
             next_obs = (next_obs - obs_mean) / torch.sqrt(obs_var + 1e-8)
             action, logprob, _, value, action_mean = agent.get_action_and_value(next_obs)
-            values[step] = value.flatten()
-        actions[step] = action
-        actions_means[step] = action_mean
-        logprobs[step] = logprob
+            values[step] = value.flatten().cpu().numpy()
+        actions[step] = action.cpu().numpy()
+        actions_means[step] = action_mean.cpu().numpy()
+        logprobs[step] = logprob.cpu().numpy()
 
         # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
         done = np.logical_or(terminations, truncations)
-        rewards[step] = torch.tensor(reward).to(device).view(-1)
+        rewards[step] = torch.tensor(reward).to(device).view(-1).cpu().numpy()
         next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
 
         if "final_info" in infos:
@@ -221,8 +225,9 @@ if __name__ == "__main__":
         pickle.dump(train_stats, f)
 
     dataset = dict(obs=obs, act=actions, act_mean=actions_means, rew=rewards, done=dones)
-    dataset = {k: v.cpu().numpy() for k, v in dataset.items()}
+    # dataset = {k: v.cpu().numpy() for k, v in dataset.items()}
     dataset = {k: np.swapaxes(v, 0, 1) for k, v in dataset.items()}
+    dataset['obs'] = dataset['obs'].astype(np.float32)
     print("Dataset shape: ")
     print({k: v.shape for k, v in dataset.items()})
     with open(f"{args.save_dir}/dataset.pkl", "wb") as f:

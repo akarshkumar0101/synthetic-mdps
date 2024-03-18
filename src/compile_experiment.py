@@ -492,6 +492,80 @@ def create_agent_dm_control(dir_exp):
     return txt
 
 
+def collect_data_atari(dir_exp):
+    return ""
+
+
+def collect_data_procgen_sweep_embed_name(dir_exp):
+    cfgs = []
+
+    for env_id in envs_procgen[:3]:
+        for embed_name in ["resnet34_layer2_avg", "resnet34_layer3_avg", "resnet34_layer4_avg", "resnet34_layer2_max",
+                           "resnet34_layer3_max", "resnet34_layer4_max"]:
+            cfg = dict(env_id=f"{env_id}",
+                       load_dir=f"{dir_exp}/datasets/procgen/{env_id}/",
+                       save_dir=f"{dir_exp}/datasets_temp/procgen/{env_id}/{embed_name}",
+                       num_steps=131072 // 8,
+                       embed_name=embed_name)
+            cfgs.append(cfg)
+    txt = experiment_utils.create_command_txt_from_configs(cfgs,
+                                                           python_command='python cleanrl/collect_ppg_procgen.py')
+    return txt
+
+
+def collect_data_procgen_sweep_embed_name_train(dir_exp):
+    cfgs = []
+
+    for env_id in envs_procgen[:3]:
+        for embed_name in ["resnet34_layer2_avg", "resnet34_layer3_avg", "resnet34_layer4_avg", "resnet34_layer2_max",
+                           "resnet34_layer3_max", "resnet34_layer4_max"]:
+            cfg = dict(save_dir=f"{dir_exp}/datasets_temp/procgen/{env_id}/{embed_name}")
+            cfgs.append(cfg)
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, python_command='python fit_procgen.py')
+    return txt
+
+
+def collect_data_procgen(dir_exp):
+    cfgs = []
+    for env_id in envs_procgen:
+        cfg = dict(env_id=f"{env_id}",
+                   load_dir=f"{dir_exp}/datasets/procgen/{env_id}/",
+                   save_dir=f"{dir_exp}/datasets/procgen/{env_id}/",
+                   num_steps=131072,
+                   embed_name="resnet34_layer4_avg")
+        cfgs.append(cfg)
+    txt = experiment_utils.create_command_txt_from_configs(cfgs,
+                                                           python_command='python cleanrl/collect_ppg_procgen.py')
+    return txt
+
+
+def collect_data_mujoco(dir_exp):
+    cfgs = []
+    for env_id in envs_mujoco:
+        cfg = dict(env_id=f"{env_id}-v4",
+                   load_dir=f"{dir_exp}/datasets/mujoco/{env_id}/",
+                   save_dir=f"{dir_exp}/datasets/mujoco/{env_id}/",
+                   num_steps=131072)
+        cfgs.append(cfg)
+    txt = experiment_utils.create_command_txt_from_configs(cfgs,
+                                                           python_command='python cleanrl/collect_rpo_continuous_action.py')
+    return txt
+
+
+def collect_data_dm_control(dir_exp):
+    cfgs = []
+    for env_id in envs_dm_control:
+        # TODO: quadruped-escape needs SyncVectorEnv
+        cfg = dict(env_id=f"dm_control/{env_id}-v0",
+                   load_dir=f"{dir_exp}/datasets/dm_control/{env_id}/",
+                   save_dir=f"{dir_exp}/datasets/dm_control/{env_id}/",
+                   num_steps=13107)
+        cfgs.append(cfg)
+    txt = experiment_utils.create_command_txt_from_configs(cfgs,
+                                                           python_command='python cleanrl/collect_rpo_continuous_action.py')
+    return txt
+
+
 if __name__ == '__main__':
     dir_exp = "/data/vision/phillipi/akumar01/synthetic-mdps-data"
     n_nodes, n_gpus = 2, 8
@@ -506,6 +580,20 @@ if __name__ == '__main__':
         f.write(create_agent_mujoco(dir_exp))
     with open("./experiment/create_agent_dm_control.sh", "w") as f:
         f.write(create_agent_dm_control(dir_exp))
+
+    with open("./experiment/collect_data_atari.sh", "w") as f:
+        f.write(collect_data_atari(dir_exp))
+    with open("./experiment/collect_data_procgen.sh", "w") as f:
+        f.write(collect_data_procgen(dir_exp))
+    with open("./experiment/collect_data_mujoco.sh", "w") as f:
+        f.write(collect_data_mujoco(dir_exp))
+    with open("./experiment/collect_data_dm_control.sh", "w") as f:
+        f.write(collect_data_dm_control(dir_exp))
+
+    with open("./experiment/collect_data_procgen_sweep_embed_name.sh", "w") as f:
+        f.write(collect_data_procgen_sweep_embed_name(dir_exp))
+    with open("./experiment/collect_data_procgen_sweep_embed_name_train.sh", "w") as f:
+        f.write(collect_data_procgen_sweep_embed_name_train(dir_exp))
 
     txt = exp_data_syn(dir_exp)
     write_to_nodes_gpus("./experiment/data_syn.sh", txt, n_nodes, n_gpus)
