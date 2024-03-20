@@ -11,6 +11,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+from einops import repeat
 from flax.training.train_state import TrainState
 from jax import config as jax_config
 from jax.random import split
@@ -73,50 +74,65 @@ def parse_args(*args, **kwargs):
     return args
 
 
-def preprocess_dataset(dataset, d_obs_uni, d_act_uni):
+def load_dataset(path):
+    with open(path, "rb") as f:
+        dataset = pickle.load(f)
     assert 'obs' in dataset and ('logits' in dataset) or ('act_mean' in dataset)
     assert dataset['obs'].ndim == 3
+    dataset = jax.tree_map(lambda x: np.array(x).astype(np.float32), dataset)
     act_key = 'logits' if 'logits' in dataset else 'act_mean'
     obs, act, rew, done = dataset['obs'], dataset[act_key], dataset['rew'], dataset['done']
-    d_obs, d_act = obs.shape[-1], act.shape[-1]
+    N, T, Do = obs.shape
+    time = repeat(jnp.arange(T), 'T -> N T', N=N)
+    return dict(obs=obs, act=act, rew=rew, done=done, time=time)
 
-    obs_mean, obs_std = obs.mean(axis=(0, 1)), obs.std(axis=(0, 1))
-    act_mean, act_std = act.mean(axis=(0, 1)), act.std(axis=(0, 1))
+
+def train_test_split(dataset, percent_train=0.8):
+    N = len(dataset['obs'])
+    n_train = int(N * percent_train)
+    dataset_train = jax.tree_map(lambda x: x[:n_train], dataset)
+    dataset_test = jax.tree_map(lambda x: x[n_train:], dataset)
+    return dataset_train, dataset_test
+
+
+def get_percent_dataset(dataset, percent_dataset_vert=0.1, percent_dataset_horz=0.1):
+    N, T, _ = dataset['obs'].shape
+    n, t = int(N * percent_dataset_vert), int(T * percent_dataset_horz)
+    return jax.tree_map(lambda x: x[:n, :t], dataset)
+
+
+def transform_dataset(dataset, obs_mean, obs_std, act_mean, act_std, d_obs_uni, d_act_uni):
+    d_obs, d_act = dataset['obs'].shape[-1], dataset['act'].shape[-1]
+    obs, act, rew, done, time = dataset['obs'], dataset['act'], dataset['rew'], dataset['done'], dataset['time']
     obs = (obs - obs_mean) / (obs_std + 1e-8)
     act = (act - act_mean) / (act_std + 1e-8)
-
     obs_mat, act_mat = np.eye(d_obs_uni, d_obs, dtype=np.float32), np.eye(d_act_uni, d_act, dtype=np.float32)
-    dataset = dict(obs=obs @ obs_mat.T, act=act @ act_mat.T, rew=rew, done=done)
-    stats = dict(obs_mean=obs_mean, obs_std=obs_std, act_mean=act_mean, act_std=act_std)
-    return dataset, stats
+    dataset = dict(obs=obs @ obs_mat.T, act=act @ act_mat.T, rew=rew, done=done, time=time)
+    return dataset
 
 
-def construct_dataset(include_paths, exclude_paths, d_obs_uni, d_acts_uni):
+def construct_dataset(include_paths, exclude_paths, d_obs_uni, d_acts_uni, percent_dataset=(1., 1.)):
     include_paths = [os.path.abspath(p) for i in include_paths for p in glob.glob(i)]
     exclude_paths = [os.path.abspath(p) for i in exclude_paths for p in glob.glob(i)]
     paths = sorted(set(include_paths) - set(exclude_paths))
     print(f"Found {len(paths)} datasets")
     assert len(paths) > 0
-    datasets = []
-    for p in paths:
-        print(f"Loading dataset from {p}")
-        with open(p, 'rb') as f:
-            dataset = pickle.load(f)
-        dataset = jax.tree_map(lambda x: np.array(x).astype(np.float32), dataset)
+    datasets_train, datasets_test = [], []
+    for path in paths:
+        print(f"Loading dataset from {path}")
+        dataset = load_dataset(path)
         print(f"Dataset shape: {jax.tree_map(lambda x: (x.shape, x.dtype), dataset)}")
-        dataset, stats = preprocess_dataset(dataset, d_obs_uni=d_obs_uni, d_act_uni=d_acts_uni)
-        datasets.append(dataset)
-    dataset = {k: np.concatenate([d[k] for d in datasets], axis=0) for k in datasets[0].keys()}
-    return dataset
-
-
-def train_test_split(rng, dataset, percent_train=0.8):
-    n = len(dataset['obs'])
-    n_train = int(n * percent_train)
-    idx = jax.random.permutation(rng, n)
-    idx_train, idx_test = idx[:n_train], idx[n_train:]
-    dataset_train = jax.tree_map(lambda x: x[idx_train], dataset)
-    dataset_test = jax.tree_map(lambda x: x[idx_test], dataset)
+        obs_mean, obs_std = dataset['obs'].mean(axis=(0, 1)), dataset['obs'].std(axis=(0, 1))
+        act_mean, act_std = dataset['act'].mean(axis=(0, 1)), dataset['act'].std(axis=(0, 1))
+        dataset_train, dataset_test = train_test_split(dataset, percent_train=0.8)
+        pv, ph = percent_dataset
+        dataset_train = get_percent_dataset(dataset_train, percent_dataset_vert=pv, percent_dataset_horz=ph)
+        dataset_train = transform_dataset(dataset_train, obs_mean, obs_std, act_mean, act_std, d_obs_uni, d_acts_uni)
+        dataset_test = transform_dataset(dataset_test, obs_mean, obs_std, act_mean, act_std, d_obs_uni, d_acts_uni)
+        datasets_train.append(dataset_train)
+        datasets_test.append(dataset_test)
+    dataset_train = {k: np.concatenate([d[k] for d in datasets_train], axis=0) for k in datasets_train[0].keys()}
+    dataset_test = {k: np.concatenate([d[k] for d in datasets_test], axis=0) for k in datasets_test[0].keys()}
     return dataset_train, dataset_test
 
 
@@ -256,7 +272,7 @@ def augment_batch(rng, batch, n_augs, dist="uniform"):
         obs_mat = jax.random.normal(_rng_obs, (d_obs, d_obs)) * jnp.sqrt(1. / d_obs)
         act_mat = jax.random.normal(_rng_act, (d_act, d_act)) * jnp.sqrt(1. / d_act)
         return dict(obs=instance['obs'] @ obs_mat.T, act=instance['act'] @ act_mat.T,
-                    rew=instance['rew'], done=instance['done'])
+                    rew=instance['rew'], done=instance['done'], time=instance['time'])
 
     if dist == "uniform":
         aug_ids = jax.random.randint(rng, (bs,), minval=0, maxval=n_augs)
@@ -276,19 +292,16 @@ def main(args):
     rng = jax.random.PRNGKey(args.seed)
     # run = wandb.init(entity=args.entity, project=args.project, name=args.name, config=args)
 
-    dataset_all = construct_dataset(args.dataset_paths, args.exclude_dataset_paths, args.d_obs_uni, args.d_act_uni)
-    dataset_train, dataset_test = train_test_split(jax.random.PRNGKey(0), dataset_all, percent_train=0.8)
-    del dataset_all
-    dataset_train, _ = train_test_split(jax.random.PRNGKey(0), dataset_train, percent_train=args.percent_dataset)
-    dataset_train = jax.tree_map(lambda x: x[:, :1024], dataset_train)
-
+    dataset_train, dataset_test = construct_dataset(args.dataset_paths, args.exclude_dataset_paths,
+                                                    args.d_obs_uni, args.d_act_uni,
+                                                    percent_dataset=(args.percent_dataset, 1.))
     print("----------------------------")
     print(f"Train Dataset shape: {jax.tree_map(lambda x: (type(x), x.shape, x.dtype), dataset_train)}")
     print(f"Test Dataset shape: {jax.tree_map(lambda x: (type(x), x.shape, x.dtype), dataset_test)}")
 
     agent = BCTransformer(d_obs=args.d_obs_uni, d_act=args.d_act_uni,
                           n_layers=args.n_layers, n_heads=args.n_heads, d_embd=args.d_embd, ctx_len=args.ctx_len,
-                          obj=args.obj, mask_type=args.mask_type)
+                          mask_type=args.mask_type)
 
     rng, _rng = split(rng)
     if args.load_ckpt is not None:
@@ -298,11 +311,11 @@ def main(args):
         batch = sample_batch_from_dataset(rng, dataset_train, 1, args.ctx_len, args.seq_len)
         batch = augment_batch(rng, batch, 0)
         batch = jax.tree_map(lambda x: x[0], batch)
-        agent_params = agent.init(_rng, batch['obs'], batch['act'])
+        agent_params = agent.init(_rng, batch['obs'], batch['act'], batch['time'])
     print("Agent parameter count: ", sum(p.size for p in jax.tree_util.tree_leaves(agent_params)))
     tabulate_fn = nn.tabulate(agent, jax.random.key(0), compute_flops=True, compute_vjp_flops=True)
     batch = sample_batch_from_dataset(rng, dataset_train, args.bs, args.ctx_len, args.seq_len)
-    batch = jax.tree_map(lambda x: x[0], (batch['obs'], batch['act']))
+    batch = jax.tree_map(lambda x: x[0], (batch['obs'], batch['act'], batch['time']))
     print(tabulate_fn(*batch))
 
     lr_warmup = optax.linear_schedule(0., args.lr, args.n_iters // 100)
@@ -319,11 +332,15 @@ def main(args):
     train_state = TrainState.create(apply_fn=agent.apply, params=agent_params, tx=tx)
 
     def loss_fn(agent_params, batch):
-        out = jax.vmap(agent.apply, in_axes=(None, 0, 0))(agent_params, batch['obs'], batch['act'])
-        target = batch['act'] if args.obj == "bc" else batch['obs']
-        mse = ((out - target) ** 2).mean(axis=-1).mean(axis=0)
-        loss = mse.mean()
-        metrics = dict(loss=loss, mse=mse)
+        result = jax.vmap(agent.apply, in_axes=(None, 0, 0, 0))(agent_params, batch['obs'], batch['act'], batch['time'])
+        act_now, act_now_pred = result['act_now'], result['act_now_pred']
+        obs_nxt, obs_nxt_pred = result['obs_nxt'], result['obs_nxt_pred']
+        mse_act = ((act_now - act_now_pred) ** 2).mean(axis=-1)
+        mse_obs = ((obs_nxt - obs_nxt_pred) ** 2).mean(axis=-1)
+
+        mse_act, mse_obs = mse_act.mean(axis=0), mse_obs.mean(axis=0)  # mean over batch
+        loss = mse_act.mean() + mse_obs.mean()  # mean over ctx
+        metrics = dict(loss=loss, mse_act=mse_act, mse_obs=mse_obs)
         return loss, metrics
 
     def iter_test(train_state, batch):

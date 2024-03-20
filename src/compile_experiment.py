@@ -597,8 +597,9 @@ if __name__ == '__main__':
                 for gato in [False, True]:
                     n_iters = {False: int(10e3), True: int(50e3)}[use_augs]
                     with open(f"./experiment/train_{obj}_{domain}_augs={use_augs}_gato={gato}.sh", "w") as f:
-                        f.write(exp_train(dir_exp, obj=obj, domain=domain, use_augs=use_augs,
-                                          gato=gato, n_iters=n_iters, percent_data=0.25))
+                        txt = exp_train(dir_exp, obj=obj, domain=domain, use_augs=use_augs,
+                                        gato=gato, n_iters=n_iters, percent_data=0.25)
+                        f.write(txt)
 
     with open("./experiment/test_bc.sh", "w") as f:
         f.write(exp_test(dir_exp, obj="bc"))

@@ -78,14 +78,15 @@ class BCTransformer(nn.Module):
     n_heads: int
     d_embd: int
     ctx_len: int
-    obj: str = "bc"
+
     mask_type: str = "causal"
+    max_dt: int = 16
 
     def setup(self):
         self.embed_obs = nn.Dense(features=self.d_embd)
         self.embed_act = nn.Dense(features=self.d_embd)
         self.embed_pos = nn.Embed(num_embeddings=self.ctx_len, features=self.d_embd)
-        self.embed_dt = nn.Embed(num_embeddings=10, features=self.d_embd)
+        self.embed_dt = nn.Embed(num_embeddings=self.max_dt, features=self.d_embd)
 
         self.blocks = [Block(n_heads=self.n_heads, mask_type=self.mask_type) for _ in range(self.n_layers)]
         self.ln = nn.LayerNorm()
@@ -97,30 +98,32 @@ class BCTransformer(nn.Module):
         assert obs.shape[0] == act.shape[0]
         assert obs.shape[0] <= self.ctx_len
         T, _ = obs.shape
+        time_prv, time_now, time_nxt = time[:-2], time[1:-1], time[2:]
+        dt = time_nxt - time_now
 
         x_obs = self.embed_obs(obs)  # (T, D)
         x_act = self.embed_act(act)  # (T, D)
         x_pos = self.embed_pos(jnp.arange(T))  # (T, D)
+        x_dt = self.embed_dt(dt)
 
-        x_obs_now, x_obs_nxt = x_obs[:-1], x_obs[1:]
-        x_act_now, x_act_nxt = x_act[:-1], x_act[1:]
-        x_pos_now, x_pos_nxt = x_pos[:-1], x_pos[1:]
+        obs_prv, obs_now, obs_nxt = obs[:-2], obs[1:-1], obs[2:]
+        act_prv, act_now, act_nxt = act[:-2], act[1:-1], act[2:]
+        x_obs_prv, x_obs_now, x_obs_nxt = x_obs[:-2], x_obs[1:-1], x_obs[2:]
+        x_act_prv, x_act_now, x_act_nxt = x_act[:-2], x_act[1:-1], x_act[2:]
+        x_pos_prv, x_pos_now, x_pos_nxt = x_pos[:-2], x_pos[1:-1], x_pos[2:]
 
-
-        if self.obj == "bc":
-            act_p = jnp.concatenate([jnp.zeros_like(act[:1]), act[:-1]], axis=0)
-            x_act = self.embed_act(act_p)  # (T, D)
-        elif self.obj == "wm":
-            x_act = self.embed_act(act)
-        else:
-            raise NotImplementedError
-
-        x = x_obs + x_act + x_pos
+        x = x_pos_now + x_obs_now + x_act_prv + x_dt
         for block in self.blocks:
             x = block(x)
         x = self.ln(x)
-        out = self.actor(x)  # (T, Do) or (T, Da)
-        return out
+
+        act_now_pred = self.actor(x)
+        obs_nxt_pred = self.wm(x)
+
+        result = dict(obs_prv=obs_prv, obs_now=obs_now, obs_nxt=obs_nxt,
+                      act_prv=act_prv, act_now=act_now, act_nxt=act_nxt,
+                      act_now_pred=act_now_pred, obs_nxt_pred=obs_nxt_pred)
+        return result
 
 
 def calc_entropy_stable(logits, axis=-1):
