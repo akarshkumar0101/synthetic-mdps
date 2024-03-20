@@ -107,6 +107,15 @@ envs_dm_control = ["acrobot-swingup", "acrobot-swingup_sparse", "ball_in_cup-cat
                    "point_mass-easy", "point_mass-hard", "quadruped-walk", "quadruped-run", "quadruped-escape",
                    "quadruped-fetch", "reacher-easy", "reacher-hard", "stacker-stack_2", "stacker-stack_4",
                    "swimmer-swimmer6", "swimmer-swimmer15", "walker-stand", "walker-walk", "walker-run", ]
+domain2envs = {
+    "synthetic": envs_synthetic,
+    "classic": envs_classic,
+    "minatar": envs_minatar,
+    "procgen": envs_procgen,
+    "atari": envs_atari_57,
+    "mujoco": envs_mujoco,
+    "dm_control": envs_dm_control,
+}
 
 # envs_test = envs_classic
 envs_test = envs_classic + envs_minatar
@@ -147,57 +156,38 @@ env_test2ft_steps = {
 #     return out
 
 
-def exp_train(dir_exp, obj="bc", n_augs=0, n_iters_eval=100, n_iters=80000):
+def exp_train(dir_exp, obj='bc', domain='mujoco', use_augs=True, gato=False,
+              n_iters_eval=10, n_iters=100000,
+              bs=64, ctx_len=512, n_ckpts=1, percent_data=1.0):
     cfg_default = vars(icl_bc_ed.parse_args())
-    # print(cfg_default)
+
+    n_augs = int(1e6) if use_augs else 0
+    save_dir = f"{dir_exp}/train_{obj}_aug/" if use_augs else f"{dir_exp}/train_{obj}/"
 
     cfgs = []
 
     # ---------------- PRETRAINING ON TRAIN ENVS ----------------
-    for env_id in envs_train:
+    for env_id in domain2envs[domain]:
         cfg = cfg_default.copy()
-        cfg.update(
-            dataset_paths=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/dataset.pkl",
-            exclude_dataset_paths=None,
-            save_dir=f"{dir_exp}/train_{obj}/{env_id}",
-            n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, n_ckpts=5, n_augs=n_augs,
-            bs=64, ctx_len=1024,
-        )
-        cfgs.append(cfg)
-    # ---------------- PRETRAINING ON TEST ENV ----------------
-    for env_id in envs_test:
-        cfg = cfg_default.copy()
-        cfg.update(
-            dataset_paths=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/dataset.pkl",
-            exclude_dataset_paths=None,
-            save_dir=f"{dir_exp}/train_{obj}/{env_id}",
-            n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, n_ckpts=5, n_augs=n_augs,
-            bs=64, ctx_len=1024,
-        )
-        cfgs.append(cfg)
-    # ---------------- PRETRAINING ON ALL TEST ENVS ----------------
-    cfg = cfg_default.copy()
-    cfg.update(
-        dataset_paths=f"{dir_exp}/datasets/real/*/*/dataset.pkl",
-        exclude_dataset_paths=None,
-        save_dir=f"{dir_exp}/train_{obj}/all",
-        n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, n_ckpts=5, n_augs=n_augs,
-        bs=64, ctx_len=1024,
-    )
-    cfgs.append(cfg)
-    # ---------------- PRETRAINING ON N-1 ENVS ----------------
-    for env_id in envs_test:
-        cfg = cfg_default.copy()
-        cfg.update(
-            dataset_paths=f"{dir_exp}/datasets/real/*/*/dataset.pkl",
-            exclude_dataset_paths=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/dataset.pkl",
-            save_dir=f"{dir_exp}/train_{obj}/all-{env_id}",
-            n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, n_ckpts=5, n_augs=n_augs,
-            bs=64, ctx_len=1024,
-        )
-        cfgs.append(cfg)
+        if not gato:
+            dataset_paths = f"{dir_exp}/datasets/{domain}/{env_id}/dataset.pkl"
+            exclude_dataset_paths = None
+            save_dir_i = f"{save_dir}/{env_id}"
+        else:
+            dataset_paths = f"{dir_exp}/datasets/{domain}/*/dataset.pkl"
+            exclude_dataset_paths = f"{dir_exp}/datasets/{domain}/{env_id}/dataset.pkl"
+            save_dir_i = f"{save_dir}/all-{env_id}"
 
-    txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_bc_ed.py')
+        cfg.update(
+            dataset_paths=dataset_paths,
+            exclude_dataset_paths=exclude_dataset_paths,
+            save_dir=save_dir_i,
+            n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, n_ckpts=n_ckpts, n_augs=n_augs,
+            bs=bs, ctx_len=ctx_len,
+            percent_data=percent_data,
+        )
+        cfgs.append(cfg)
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, python_command='python icl_bc_ed.py')
     return txt
 
 
@@ -567,10 +557,9 @@ def collect_data_dm_control(dir_exp):
 
 
 if __name__ == '__main__':
-    dir_exp = "/data/vision/phillipi/akumar01/synthetic-mdps-data"
-    n_nodes, n_gpus = 2, 8
     os.system("rm -rf ./experiment/")
     os.makedirs("./experiment/", exist_ok=True)
+    dir_exp = "/data/vision/phillipi/akumar01/synthetic-mdps-data"
 
     with open("./experiment/create_agent_atari.sh", "w") as f:
         f.write(create_agent_atari(dir_exp))
@@ -590,33 +579,26 @@ if __name__ == '__main__':
     with open("./experiment/collect_data_dm_control.sh", "w") as f:
         f.write(collect_data_dm_control(dir_exp))
 
-    with open("./experiment/collect_data_procgen_sweep_embed_name.sh", "w") as f:
-        f.write(collect_data_procgen_sweep_embed_name(dir_exp))
-    with open("./experiment/collect_data_procgen_sweep_embed_name_train.sh", "w") as f:
-        f.write(collect_data_procgen_sweep_embed_name_train(dir_exp))
+    # with open("./experiment/collect_data_procgen_sweep_embed_name.sh", "w") as f:
+    #     f.write(collect_data_procgen_sweep_embed_name(dir_exp))
+    # with open("./experiment/collect_data_procgen_sweep_embed_name_train.sh", "w") as f:
+    #     f.write(collect_data_procgen_sweep_embed_name_train(dir_exp))
 
-    txt = exp_data_syn(dir_exp)
-    write_to_nodes_gpus("./experiment/data_syn.sh", txt, n_nodes, n_gpus)
-    txt = exp_data_classic(dir_exp)
-    write_to_nodes_gpus("./experiment/data_classic.sh", txt, n_nodes, n_gpus)
-    txt = exp_data_minatar(dir_exp)
-    write_to_nodes_gpus("./experiment/data_minatar.sh", txt, n_nodes, n_gpus)
-    # txt = exp_data_atari(dir_exp)
-    # write_to_nodes_gpus("./experiment/data_atari.sh", txt, n_nodes, n_gpus, txt_header=txt_header_atari)
-    # txt = exp_data_procgen(dir_exp)
-    # write_to_nodes_gpus("./experiment/data_procgen.sh", txt, n_nodes, n_gpus, txt_header=txt_header_procgen)
+    with open("./experiment/data_syn.sh", "w") as f:
+        f.write(exp_data_syn(dir_exp))
+    with open("./experiment/data_classic.sh", "w") as f:
+        f.write(exp_data_classic(dir_exp))
+    with open("./experiment/data_minatar.sh", "w") as f:
+        f.write(exp_data_minatar(dir_exp))
 
-    txt = exp_train(dir_exp, obj="bc", n_augs=int(1e6))
-    write_to_nodes_gpus("./experiment/train_bc.sh", txt, n_nodes, n_gpus)
+    for obj in ["bc"]:
+        for domain in ["mujoco"]:
+            for use_augs in [False, True]:
+                for gato in [False, True]:
+                    n_iters = {False: int(10e3), True: int(50e3)}[use_augs]
+                    with open(f"./experiment/train_{obj}_{domain}_augs={use_augs}_gato={gato}.sh", "w") as f:
+                        f.write(exp_train(dir_exp, obj=obj, domain=domain, use_augs=use_augs,
+                                          gato=gato, n_iters=n_iters, percent_data=0.25))
 
-    txt = exp_test(dir_exp, obj="bc")
-    write_to_nodes_gpus("./experiment/test_bc.sh", txt, n_nodes, n_gpus)
-
-    # txt = exp_unroll(dir_exp, obj="bc")
-    # write_to_nodes_gpus("./experiment/unroll_bc.sh", txt, n_nodes=8, n_gpus=4)
-
-    # txt = exp_train(dir_exp, obj="wm")
-    # write_to_nodes_gpus("./experiment/train_wm.sh", txt, n_nodes, n_gpus)
-    #
-    # txt = exp_test(dir_exp, obj="wm")
-    # write_to_nodes_gpus("./experiment/test_wm.sh", txt, n_nodes, n_gpus)
+    with open("./experiment/test_bc.sh", "w") as f:
+        f.write(exp_test(dir_exp, obj="bc"))

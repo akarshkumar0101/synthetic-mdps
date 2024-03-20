@@ -72,70 +72,55 @@ class Block(nn.Module):
 
 
 class BCTransformer(nn.Module):
-    n_acts: int
+    d_obs: int
+    d_act: int
     n_layers: int
     n_heads: int
     d_embd: int
-    n_steps: int
-
+    ctx_len: int
+    obj: str = "bc"
     mask_type: str = "causal"
 
     def setup(self):
         self.embed_obs = nn.Dense(features=self.d_embd)
-        self.embed_act = nn.Embed(num_embeddings=self.n_acts, features=self.d_embd)
-        self.embed_time = nn.Embed(num_embeddings=self.n_steps, features=self.d_embd)
+        self.embed_act = nn.Dense(features=self.d_embd)
+        self.embed_pos = nn.Embed(num_embeddings=self.ctx_len, features=self.d_embd)
+        self.embed_dt = nn.Embed(num_embeddings=10, features=self.d_embd)
 
         self.blocks = [Block(n_heads=self.n_heads, mask_type=self.mask_type) for _ in range(self.n_layers)]
         self.ln = nn.LayerNorm()
-        self.actor = nn.Dense(features=self.n_acts, kernel_init=nn.initializers.orthogonal(0.01))  # T, A
 
-    def __call__(self, obs, act):  # obs: (T, O), # act: (T, )
+        self.actor = nn.Dense(features=self.d_act, kernel_init=nn.initializers.orthogonal(0.01))  # T, Da
+        self.wm = nn.Dense(features=self.d_obs, kernel_init=nn.initializers.orthogonal(0.01))  # T, Do
+
+    def __call__(self, obs, act, time):  # obs: (T, Do), # act: (T, Da), # time: (T, )
         assert obs.shape[0] == act.shape[0]
-        assert obs.shape[0] <= self.n_steps
+        assert obs.shape[0] <= self.ctx_len
         T, _ = obs.shape
 
-        act_p = jnp.concatenate([jnp.zeros_like(act[:1]), act[:-1]], axis=0)
-
-        x_obs = self.embed_obs(obs)  # (T, D)
-        x_act = self.embed_act(act_p)  # (T, D)
-        x_time = self.embed_time(jnp.arange(T))  # (T, D)
-        x = x_obs + x_act + x_time
-
-        for block in self.blocks:
-            x = block(x)
-        x = self.ln(x)
-        logits = self.actor(x)  # (T, A)
-        return logits
-
-
-class WMTransformer(nn.Module):
-    n_acts: int
-    n_layers: int
-    n_heads: int
-    d_embd: int
-    n_steps: int
-    d_obs: int
-
-    def setup(self):
-        self.embed_obs = nn.Dense(features=self.d_embd)
-        self.embed_act = nn.Embed(num_embeddings=self.n_acts, features=self.d_embd)
-        self.embed_time = nn.Embed(num_embeddings=self.n_steps, features=self.d_embd)
-
-        self.blocks = [Block(n_heads=self.n_heads) for _ in range(self.n_layers)]
-        self.ln = nn.LayerNorm()
-        self.lin_out = nn.Dense(features=self.d_obs, kernel_init=nn.initializers.orthogonal(0.01))  # T, A
-
-    def __call__(self, obs, act):  # obs: (T, O), # act: (T, )
         x_obs = self.embed_obs(obs)  # (T, D)
         x_act = self.embed_act(act)  # (T, D)
-        x_time = self.embed_time(jnp.arange(self.n_steps))  # (T, D)
-        x = x_obs + x_act + x_time
+        x_pos = self.embed_pos(jnp.arange(T))  # (T, D)
 
+        x_obs_now, x_obs_nxt = x_obs[:-1], x_obs[1:]
+        x_act_now, x_act_nxt = x_act[:-1], x_act[1:]
+        x_pos_now, x_pos_nxt = x_pos[:-1], x_pos[1:]
+
+
+        if self.obj == "bc":
+            act_p = jnp.concatenate([jnp.zeros_like(act[:1]), act[:-1]], axis=0)
+            x_act = self.embed_act(act_p)  # (T, D)
+        elif self.obj == "wm":
+            x_act = self.embed_act(act)
+        else:
+            raise NotImplementedError
+
+        x = x_obs + x_act + x_pos
         for block in self.blocks:
             x = block(x)
         x = self.ln(x)
-        obs_pred = self.lin_out(x)  # (T, A)
-        return obs_pred
+        out = self.actor(x)  # (T, Do) or (T, Da)
+        return out
 
 
 def calc_entropy_stable(logits, axis=-1):
