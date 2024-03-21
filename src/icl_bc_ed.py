@@ -106,7 +106,13 @@ def transform_dataset(dataset, obs_mean, obs_std, act_mean, act_std, d_obs_uni, 
     obs, act, rew, done, time = dataset['obs'], dataset['act'], dataset['rew'], dataset['done'], dataset['time']
     obs = (obs - obs_mean) / (obs_std + 1e-8)
     act = (act - act_mean) / (act_std + 1e-8)
-    obs_mat, act_mat = np.eye(d_obs_uni, d_obs, dtype=np.float32), np.eye(d_act_uni, d_act, dtype=np.float32)
+
+    rng = jax.random.PRNGKey(0)
+    obs_mat = jax.random.orthogonal(rng, max(d_obs, d_obs_uni))[:d_obs_uni, :d_obs]
+    act_mat = jax.random.orthogonal(rng, max(d_act, d_act_uni))[:d_act_uni, :d_act]
+    obs_mat = obs_mat / np.sqrt(np.diag(obs_mat @ obs_mat.T))[:, None]  # to make sure output is standard normal
+    act_mat = act_mat / np.sqrt(np.diag(act_mat @ act_mat.T))[:, None]
+    obs_mat, act_mat = np.array(obs_mat, dtype=np.float32), np.array(act_mat, dtype=np.float32)
     dataset = dict(obs=obs @ obs_mat.T, act=act @ act_mat.T, rew=rew, done=done, time=time)
     return dataset
 
@@ -122,11 +128,13 @@ def construct_dataset(include_paths, exclude_paths, d_obs_uni, d_acts_uni, perce
         print(f"Loading dataset from {path}")
         dataset = load_dataset(path)
         print(f"Dataset shape: {jax.tree_map(lambda x: (x.shape, x.dtype), dataset)}")
-        obs_mean, obs_std = dataset['obs'].mean(axis=(0, 1)), dataset['obs'].std(axis=(0, 1))
-        act_mean, act_std = dataset['act'].mean(axis=(0, 1)), dataset['act'].std(axis=(0, 1))
         dataset_train, dataset_test = train_test_split(dataset, percent_train=0.8)
+        obs_mean, obs_std = dataset_train['obs'].mean(axis=(0, 1)), dataset_train['obs'].std(axis=(0, 1))
+        act_mean, act_std = dataset_train['act'].mean(axis=(0, 1)), dataset_train['act'].std(axis=(0, 1))
+
         pv, ph = percent_dataset
         dataset_train = get_percent_dataset(dataset_train, percent_dataset_vert=pv, percent_dataset_horz=ph)
+
         dataset_train = transform_dataset(dataset_train, obs_mean, obs_std, act_mean, act_std, d_obs_uni, d_acts_uni)
         dataset_test = transform_dataset(dataset_test, obs_mean, obs_std, act_mean, act_std, d_obs_uni, d_acts_uni)
         datasets_train.append(dataset_train)
@@ -269,8 +277,8 @@ def augment_batch(rng, batch, n_augs, dist="uniform"):
     def augment_instance(instance, aug_id):
         rng = jax.random.PRNGKey(aug_id)
         _rng_obs, _rng_act = split(rng, 2)
-        obs_mat = jax.random.normal(_rng_obs, (d_obs, d_obs)) * jnp.sqrt(1. / d_obs)
-        act_mat = jax.random.normal(_rng_act, (d_act, d_act)) * jnp.sqrt(1. / d_act)
+        obs_mat = jax.random.normal(_rng_obs, (d_obs, d_obs)) / jnp.sqrt(d_obs)
+        act_mat = jax.random.normal(_rng_act, (d_act, d_act)) / jnp.sqrt(d_act)
         return dict(obs=instance['obs'] @ obs_mat.T, act=instance['act'] @ act_mat.T,
                     rew=instance['rew'], done=instance['done'], time=instance['time'])
 
@@ -392,7 +400,7 @@ def main(args):
             test_loss = np.mean([i['loss'] for i in metrics_test[-20:]])
             pbar.set_postfix(train_loss=train_loss, test_loss=test_loss)
 
-        if i_iter % 20 == 0:
+        if i_iter % 10 == 0:
             metrics_train.append(metrics)
             rng, batch = sample_test_batch(rng)
             train_state, metrics = iter_test(train_state, batch)
