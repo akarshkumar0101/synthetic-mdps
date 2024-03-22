@@ -41,20 +41,20 @@ Transfer tasks:
 #         return dict(gridenv=5, cartpole=2, mountaincar=3, acrobot=3)[config["name"]]
 
 np.random.seed(1)
-envs_synthetic = []
-for i in range(4):
+envs_csmdp = []
+for i in range(64):
     i_d, i_s, t_a, t_c, t_l, t_s, o_d, o_c, r_c = [np.random.randint(0, 5) for _ in range(9)]
-    env_id = f"name=csmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_c={t_c};t_l={t_l};t_s={t_s};o_d={o_d};o_c={o_c};r_c={r_c};tl=64"
-    envs_synthetic.append(env_id)
-    env_id = f"name=csmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_c={t_c};t_l={t_l};t_s={t_s};o_d={o_d};o_c={o_c};r_c={r_c};tl=1"
-    envs_synthetic.append(env_id)
+    tl = np.random.choice([1, 4, 16, 64, 128, 256, 512], replace=True)
+    env_id = f"name=csmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_c={t_c};t_l={t_l};t_s={t_s};o_d={o_d};o_c={o_c};r_c={r_c};tl={tl}"
+    envs_csmdp.append(env_id)
 
-for i in range(4):
+envs_dsmdp = []
+for i in range(64):
     i_d, i_s, t_a, t_s, o_d = [np.random.randint(0, 5) for _ in range(5)]
-    env_id = f"name=dsmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_s={t_s};o_d={o_d};tl=64"
-    envs_synthetic.append(env_id)
-    env_id = f"name=dsmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_s={t_s};o_d={o_d};tl=1"
-    envs_synthetic.append(env_id)
+    tl = np.random.choice([1, 4, 16, 64, 128, 256, 512], replace=True)
+    env_id = f"name=dsmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_s={t_s};o_d={o_d};tl={tl}"
+    envs_dsmdp.append(env_id)
+envs_synthetic = envs_csmdp + envs_dsmdp
 
 # np.random.seed(1)
 # for i in range(3):
@@ -108,7 +108,9 @@ envs_dm_control = ["acrobot-swingup", "acrobot-swingup_sparse", "ball_in_cup-cat
                    "quadruped-fetch", "reacher-easy", "reacher-hard", "stacker-stack_2", "stacker-stack_4",
                    "swimmer-swimmer6", "swimmer-swimmer15", "walker-stand", "walker-walk", "walker-run", ]
 domain2envs = {
-    "synthetic": envs_synthetic,
+    "csmdp": envs_csmdp,
+    "dsmdp": envs_dsmdp,
+
     "classic": envs_classic,
     "minatar": envs_minatar,
     "procgen": envs_procgen,
@@ -172,11 +174,11 @@ def exp_train(dir_exp, obj='bc', domain='mujoco', use_augs=True, gato=False,
         if not gato:
             dataset_paths = f"{dir_exp}/datasets/{domain}/{env_id}/dataset.pkl"
             exclude_dataset_paths = None
-            save_dir_i = f"{save_dir}/{env_id}"
+            save_dir_i = f"{save_dir}/{domain}/{env_id}"
         else:
             dataset_paths = f"{dir_exp}/datasets/{domain}/*/dataset.pkl"
             exclude_dataset_paths = f"{dir_exp}/datasets/{domain}/{env_id}/dataset.pkl"
-            save_dir_i = f"{save_dir}/all-{env_id}"
+            save_dir_i = f"{save_dir}/{domain}/all-{env_id}"
 
         cfg.update(
             dataset_paths=dataset_paths,
@@ -187,6 +189,82 @@ def exp_train(dir_exp, obj='bc', domain='mujoco', use_augs=True, gato=False,
             percent_data=percent_data,
         )
         cfgs.append(cfg)
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, python_command='python icl_bc_ed.py')
+    return txt
+
+
+def exptest_mujoco(dir_exp, obj='bc', domain='mujoco', train_use_augs=True, train_gato=False,
+                   n_iters_eval=300, n_iters=300,
+                   bs=64, ctx_len=512, n_ckpts=0, percent_data=1.0):
+    cfg_default = vars(icl_bc_ed.parse_args())
+
+    n_augs = 0
+    cfgs = []
+    # ---------------- PRETRAINING ON TRAIN ENVS ----------------
+    for env_id in domain2envs[domain]:
+        for i_pre, pre in enumerate(['scratch', 'oracle', 'oracle_aug', 'gato', 'gato_aug']):
+            cfg = cfg_default.copy()
+
+            load_ckpts = [
+                "None",
+                f"{dir_exp}/train_bc/mujoco/{env_id}/ckpt_{10000:07d}.pkl",
+                f"{dir_exp}/train_bc_aug/mujoco/{env_id}/ckpt_{50000:07d}.pkl",
+                f"{dir_exp}/train_bc/mujoco/all-{env_id}/ckpt_{10000:07d}.pkl",
+                f"{dir_exp}/train_bc_aug/mujoco/all-{env_id}/ckpt_{50000:07d}.pkl"
+            ]
+
+            load_ckpt = load_ckpts[i_pre]
+            save_dir = f"{dir_exp}/test_bc/{domain}/{env_id}/{pre}"
+
+            dataset_paths = f"{dir_exp}/datasets/{domain}/{env_id}/dataset.pkl"
+            exclude_dataset_paths = None
+
+            cfg.update(
+                dataset_paths=dataset_paths,
+                exclude_dataset_paths=exclude_dataset_paths,
+                load_ckpt=load_ckpt,
+                save_dir=save_dir,
+                n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, n_ckpts=n_ckpts, n_augs=n_augs,
+                bs=bs, ctx_len=ctx_len,
+                percent_data=percent_data,
+            )
+            cfgs.append(cfg)
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, python_command='python icl_bc_ed.py')
+    return txt
+
+
+def exptest_csmdpdsmdp(dir_exp, obj='bc', domain_test='csmdp', domain='mujoco', train_use_augs=True, train_gato=False,
+                       n_iters_eval=300, n_iters=300,
+                       bs=64, ctx_len=512, n_ckpts=0, percent_data=1.0):
+    cfg_default = vars(icl_bc_ed.parse_args())
+
+    n_augs = 0
+    cfgs = []
+    # ---------------- PRETRAINING ON TRAIN ENVS ----------------
+    for env_id in domain2envs[domain]:
+        for pre in domain2envs[domain_test]:
+            for pre_aug in [False, True]:
+                cfg = cfg_default.copy()
+                load_ckpts = [
+                    f"{dir_exp}/train_bc/{domain_test}/{pre}/ckpt_{5000:07d}.pkl",
+                    f"{dir_exp}/train_bc_aug/{domain_test}/{pre}/ckpt_{25000:07d}.pkl",
+                ]
+                load_ckpt = load_ckpts[pre_aug]
+                save_dir = f"{dir_exp}/test_bc/{domain}/{env_id}/{pre}" + ("_aug" if pre_aug else "")
+
+                dataset_paths = f"{dir_exp}/datasets/{domain}/{env_id}/dataset.pkl"
+                exclude_dataset_paths = None
+
+                cfg.update(
+                    dataset_paths=dataset_paths,
+                    exclude_dataset_paths=exclude_dataset_paths,
+                    load_ckpt=load_ckpt,
+                    save_dir=save_dir,
+                    n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, n_ckpts=n_ckpts, n_augs=n_augs,
+                    bs=bs, ctx_len=ctx_len,
+                    percent_data=percent_data,
+                )
+                cfgs.append(cfg)
     txt = experiment_utils.create_command_txt_from_configs(cfgs, python_command='python icl_bc_ed.py')
     return txt
 
@@ -324,7 +402,7 @@ def exp_data_syn(dir_exp):
             n_seeds_seq=32,
             n_seeds_par=32,
             n_iters_train=100,
-            n_iters_eval=16,
+            n_iters_eval=32,
             lr=3e-4,
             save_dir=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/",
         )
@@ -556,7 +634,7 @@ def collect_data_dm_control(dir_exp):
     return txt
 
 
-if __name__ == '__main__':
+def main():
     os.system("rm -rf ./experiment/")
     os.makedirs("./experiment/", exist_ok=True)
     dir_exp = "/data/vision/phillipi/akumar01/synthetic-mdps-data"
@@ -601,5 +679,33 @@ if __name__ == '__main__':
                                         gato=gato, n_iters=n_iters, percent_data=0.25)
                         f.write(txt)
 
-    with open("./experiment/test_bc.sh", "w") as f:
-        f.write(exp_test(dir_exp, obj="bc"))
+    for obj in ["bc"]:
+        for domain in ["csmdp", "dsmdp"]:
+            for use_augs in [False, True]:
+                for gato in [False]:
+                    n_iters = {False: int(5e3), True: int(25e3)}[use_augs]
+                    with open(f"./experiment/train_{obj}_{domain}_augs={use_augs}_gato={gato}.sh", "w") as f:
+                        txt = exp_train(dir_exp, obj=obj, domain=domain, use_augs=use_augs,
+                                        gato=gato, n_iters=n_iters, percent_data=1.0)
+                        f.write(txt)
+
+    with open("./experiment/test_bc_mujoco.sh", "w") as f:
+        f.write(exptest_mujoco(dir_exp, obj="bc", percent_data=0.25))
+    with open("./experiment/test_bc_csmdp.sh", "w") as f:
+        f.write(exptest_csmdpdsmdp(dir_exp, domain_test="csmdp", percent_data=0.25))
+    with open("./experiment/test_bc_dsmdp.sh", "w") as f:
+        f.write(exptest_csmdpdsmdp(dir_exp, domain_test="dsmdp", percent_data=0.25))
+
+    # with open("./experiment/test_bc.sh", "w") as f:
+    #     f.write(exp_test(dir_exp, obj="bc"))
+
+
+if __name__ == "__main__":
+    main()
+    # dir_exp = "/data/vision/phillipi/akumar01/synthetic-mdps-data"
+    #
+    # for env_id in envs_mujoco:
+    #     print(f"{dir_exp}/train_bc/{env_id}/ckpt_{10000:07d}.pkl")
+    #     print(f"{dir_exp}/train_bc/all-{env_id}/ckpt_{10000:07d}.pkl")
+    #     print(f"{dir_exp}/train_bc_aug/{env_id}/ckpt_{50000:07d}.pkl")
+    #     print(f"{dir_exp}/train_bc_aug/all-{env_id}/ckpt_{50000:07d}.pkl")

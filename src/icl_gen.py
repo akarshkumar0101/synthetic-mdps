@@ -87,7 +87,7 @@ def main(args):
 
         carry, buffer = jax.lax.scan(ppo.eval_step, carry, xs=None, length=args.n_iters_eval)
         rets_eval = buffer['info']['returned_episode_returns'].mean()
-        dataset = {k: buffer[k] for k in ['obs', 'logits', 'act']}
+        dataset = {k: buffer[k] for k in ['obs', 'logits', 'act', 'rew', 'done']}
         # print(jax.tree_map(lambda x: x.shape, dataset))
         dataset = jax.tree_map(lambda x: rearrange(x, 'N T E ... -> (N E) T ...'), dataset)
         # print(jax.tree_map(lambda x: x.shape, dataset))
@@ -128,7 +128,7 @@ def main(args):
         plt.tight_layout()
         plt.savefig(f'{args.save_dir}/training_curve.png', dpi=300)
 
-        dataset = jax.tree_map(lambda x: np.array(x), dataset)
+        dataset = jax.tree_map(lambda x: np.array(x, dtype=np.float32), dataset)
         rets_train = np.array(rets_train)
         rets_eval = np.array(rets_eval)
         with open(f'{args.save_dir}/dataset.pkl', 'wb') as f:

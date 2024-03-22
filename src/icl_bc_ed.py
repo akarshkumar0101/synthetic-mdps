@@ -268,7 +268,7 @@ def sample_batch_from_dataset(rng, dataset, batch_size, ctx_len, seq_len):
 #     return jax.vmap(augment_instance)(batch, aug_ids_obs, aug_ids_act, aug_ids_time)
 
 
-def augment_batch(rng, batch, n_augs, dist="uniform"):
+def augment_batch(rng, batch, n_augs, dist="uniform", mat_type='gaussian'):
     if n_augs == 0:
         return batch
     bs, _, d_obs = batch['obs'].shape
@@ -277,8 +277,12 @@ def augment_batch(rng, batch, n_augs, dist="uniform"):
     def augment_instance(instance, aug_id):
         rng = jax.random.PRNGKey(aug_id)
         _rng_obs, _rng_act = split(rng, 2)
-        obs_mat = jax.random.normal(_rng_obs, (d_obs, d_obs)) / jnp.sqrt(d_obs)
-        act_mat = jax.random.normal(_rng_act, (d_act, d_act)) / jnp.sqrt(d_act)
+        if mat_type == 'gaussian':
+            obs_mat = jax.random.normal(_rng_obs, (d_obs, d_obs)) / jnp.sqrt(d_obs)
+            act_mat = jax.random.normal(_rng_act, (d_act, d_act)) / jnp.sqrt(d_act)
+        elif mat_type == 'orthogonal':
+            obs_mat = jax.random.orthogonal(_rng_obs, d_obs)
+            act_mat = jax.random.orthogonal(_rng_act, d_act)
         return dict(obs=instance['obs'] @ obs_mat.T, act=instance['act'] @ act_mat.T,
                     rew=instance['rew'], done=instance['done'], time=instance['time'])
 
