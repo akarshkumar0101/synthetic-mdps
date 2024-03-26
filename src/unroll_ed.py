@@ -1,6 +1,7 @@
 import argparse
 import pickle
 
+import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -8,55 +9,178 @@ from jax import config as jax_config
 from jax.random import split
 from tqdm.auto import tqdm
 
-import create_env
 from agents.regular_transformer import BCTransformer
+from icl_bc_ed import construct_dataset, sample_batch_from_dataset
 from util import save_pkl
-from icl_bc_ed import sample_batch_from_dataset
 
 jax_config.update("jax_debug_nans", True)
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--dataset_path', type=str, default=None)
-parser.add_argument('--env_id', type=str, default=None)
-parser.add_argument('--ckpt_path', type=str, default=None)
-parser.add_argument('--n_iters', type=int, default=3100)
-
+parser.add_argument("--seed", type=int, default=0)
+parser.add_argument('--load_ckpt', type=str, default=None)
 parser.add_argument('--save_dir', type=str, default=None)
 
-parser.add_argument('--n_envs', type=int, default=8)
+group = parser.add_argument_group("data")
+group.add_argument("--dataset_paths", type=str, nargs="+", default=[])
+group.add_argument("--exclude_dataset_paths", type=str, nargs="+", default=[])
+group.add_argument("--percent_dataset", type=float, default=1.0)
+# group.add_argument("--n_augs_test", type=int, default=0)
+group.add_argument("--n_augs", type=int, default=0)
+group.add_argument("--aug_dist", type=str, default="uniform")
+
+group = parser.add_argument_group("unroll")
+group.add_argument('--env_id', type=str, default=None)
+group.add_argument('--num_envs', type=int, default=8)
+group.add_argument('--n_iters', type=int, default=3100)
 
 # Model arguments
 group = parser.add_argument_group("model")
+group.add_argument("--d_obs_uni", type=int, default=128)
+group.add_argument("--d_act_uni", type=int, default=21)
 group.add_argument("--n_layers", type=int, default=4)
 group.add_argument("--n_heads", type=int, default=8)
 group.add_argument("--d_embd", type=int, default=256)
-group.add_argument("--ctx_len", type=int, default=1024)
+group.add_argument("--ctx_len", type=int, default=512)  # physical ctx_len of transformer
+group.add_argument("--seq_len", type=int, default=512)  # how long history it can see
 group.add_argument("--mask_type", type=str, default="causal")
-group.add_argument("--d_obs_uni", type=int, default=64)
-group.add_argument("--n_acts_uni", type=int, default=10)
-
 
 
 def main(args):
+    rng = jax.random.PRNGKey(args.seed)
+
+    envs = gym.vector.SyncVectorEnv(
+        [make_env(args.env_id, i, False, None, 0.99) for i in range(args.num_envs)]
+    )
+    d_obs = envs.observation_space.shape[-1]
+    d_act = envs.action_space.shape[-1]
+    d_obs_uni, d_act_uni = args.d_obs_uni, args.d_act_uni
+
+    dataset_train, dataset_test, (obs_mean, obs_std, act_mean, act_std) = construct_dataset(args.dataset_paths,
+                                                                                            args.exclude_dataset_paths,
+                                                                                            args.d_obs_uni,
+                                                                                            args.d_act_uni,
+                                                                                            percent_dataset=(
+                                                                                                args.percent_dataset,
+                                                                                                1.0))
+
+    print('obs_mean', obs_mean.shape)
+    print('obs_std', obs_std.shape)
+    print('act_mean', act_mean.shape)
+    print('act_std', act_std.shape)
+
+    agent = BCTransformer(d_obs=args.d_obs_uni, d_act=args.d_act_uni,
+                          n_layers=args.n_layers, n_heads=args.n_heads, d_embd=args.d_embd, ctx_len=args.ctx_len,
+                          mask_type=args.mask_type)
+    with open(args.load_ckpt, 'rb') as f:
+        agent_params = pickle.load(f)['params']
+    print(jax.tree_map(lambda x: x.shape, agent_params))
+
     rng = jax.random.PRNGKey(0)
+    obs_mat = jax.random.orthogonal(rng, max(d_obs, d_obs_uni))[:d_obs_uni, :d_obs]
+    act_mat = jax.random.orthogonal(rng, max(d_act, d_act_uni))[:d_act_uni, :d_act]
+    obs_mat = obs_mat / np.sqrt(np.diag(obs_mat @ obs_mat.T))[:, None]  # to make sure output is standard normal
+    act_mat = act_mat / np.sqrt(np.diag(act_mat @ act_mat.T))[:, None]
+    obs_mat, act_mat = np.array(obs_mat, dtype=np.float32), np.array(act_mat, dtype=np.float32)
 
-    env = create_env.create_env(args.env_id)
-    rng, _rng = split(rng)
-    env_params = env.sample_params(_rng)
+    def transform_obs(obs):
+        obs = (obs - obs_mean) / (obs_std + 1e-8)
+        return obs @ obs_mat.T
 
-    d_obs, = env.observation_space(env_params).shape
-    n_acts = env.action_space(env_params).n
+    def transform_act(act):
+        act = (act - act_mean) / (act_std + 1e-8)
+        return act @ act_mat.T
 
-    agent = BCTransformer(n_acts=args.n_acts_uni, n_layers=args.n_layers, n_heads=args.n_heads,
-                          d_embd=args.d_embd, n_steps=args.ctx_len, mask_type=args.mask_type)
-    T = args.ctx_len
+    def inverse_transform_act(act):
+        act = act @ act_mat
+        act = act * act_std + act_mean
+        return act
 
-    with open(args.dataset_path, 'rb') as f:
-        dataset = pickle.load(f)
+    obs, info = envs.reset()
+    rews = []
+    for i in tqdm(range(1000)):
+        act = envs.action_space.sample()
+        act = act + np.random.normal(size=act.shape)
+        obs, rew, term, trunc, info = envs.step(act)
+        rews.append(rew)
+    rews = np.stack(rews, axis=-1)
+    print("Random policy: ")
+    print(rews.sum(axis=-1).mean())
+
+    buffer = sample_batch_from_dataset(rng, dataset_train, args.num_envs, 512, 512)
+    print(jax.tree_map(lambda x: x.shape, buffer))
+
+    agent_forward = jax.jit(jax.vmap(agent.apply, in_axes=(None, 0, 0, 0)))
+    out = agent_forward(agent_params, buffer['obs'], buffer['act'], buffer['time'])
+    print(jax.tree_map(lambda x: x.shape, out))
+
+    print("Action Loss: ")
+    mse = ((out['act_now'] - out['act_now_pred']) ** 2).mean(axis=(0, -1))
+    print(f"{mse[0]=}, {mse[-1]=}, {mse.mean()=}")
+    print("Observation Loss: ")
+    mse = ((out['obs_nxt'] - out['obs_nxt_pred']) ** 2).mean(axis=(0, -1))
+    print(f"{mse[0]=}, {mse[-1]=}, {mse.mean()=}")
+
+    t = 505
+    print('heheheh--------------------------------------------------------------------------------')
+
+    obs, info = envs.reset()
+    buffer['obs'][:, t] = transform_obs(obs)
+    rews = []
+    for i in tqdm(range(1000)):
+        out = agent_forward(agent_params, buffer['obs'], buffer['act'], buffer['time'])
+        act = out['act_now_pred'][:, t - 1]
+
+        envact = inverse_transform_act(act)
+        envact = envact + np.random.normal(size=envact.shape)
+        obs, rew, term, trunc, info = envs.step(envact)
+
+        buffer['act'][:, t] = act
+
+        # t = t + 1
+        buffer['obs'][:, t] = transform_obs(obs)
+
+        rews.append(rew)
+    rews = np.stack(rews, axis=-1)
+    print("Agent policy: ")
+    print(rews.sum(axis=-1).mean())
+
+
+    # rng = jax.random.PRNGKey(1000)
+    # buffer2 = sample_batch_from_dataset(rng, dataset_test, args.num_envs, 512, 512)
+    #
+    # my_act, optimal_act = [], []
+    # obs = buffer2['obs'][:, 0]
+    # buffer['obs'][:, t] = obs
+    # rews = []
+    # for i in tqdm(range(255)):
+    #     out = agent_forward(agent_params, buffer['obs'], buffer['act'], buffer['time'])
+    #     act = out['act_now_pred'][:, t - 1]
+    #
+    #     my_act.append(act)
+    #     optimal_act.append(buffer2['act'][:, i])
+    #
+    #     # obs, rew, term, trunc, info = envs.step(inverse_transform_act(act))
+    #     obs = buffer2['obs'][:, i+1]
+    #
+    #     buffer['act'][:, t] = act
+    #
+    #     t = t + 1
+    #     buffer['obs'][:, t] = obs
+    #
+    # my_act = np.stack(my_act, axis=1)
+    # optimal_act = np.stack(optimal_act, axis=1)
+    # print(my_act.shape, optimal_act.shape)
+    # print(((my_act - optimal_act) ** 2).mean())
+    # print(((my_act - optimal_act) ** 2).mean(axis=(0, -1)))
+
+
+
+
+    return
+
     obs_mean, obs_std = dataset['obs'].mean(axis=(0, 1)), dataset['obs'].std(axis=(0, 1))
-
-    expert_batch = sample_batch_from_dataset(jax.random.PRNGKey(0), dataset, args.n_envs, args.ctx_len//2)
+    expert_batch = sample_batch_from_dataset(jax.random.PRNGKey(0), dataset, args.n_envs, args.ctx_len // 2)
 
     with open(args.ckpt_path, 'rb') as f:
         agent_params = pickle.load(f)['params']
@@ -141,6 +265,25 @@ def main(args):
 
     save_pkl(args.save_dir, "rets", rets)
     print(f"Score: {rets.mean()}")
+
+
+def make_env(env_id, idx, capture_video, run_name, gamma):
+    def thunk():
+        if capture_video and idx == 0:
+            env = gym.make(env_id, render_mode="rgb_array")
+            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
+        else:
+            env = gym.make(env_id, ctrl_cost_weight=0.)
+        env = gym.wrappers.FlattenObservation(env)  # deal with dm_control's Dict observation space
+        env = gym.wrappers.RecordEpisodeStatistics(env)
+        env = gym.wrappers.ClipAction(env)
+        # env = gym.wrappers.NormalizeObservation(env)
+        # env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
+        # env = gym.wrappers.NormalizeReward(env, gamma=gamma)
+        # env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
+        return env
+
+    return thunk
 
 
 if __name__ == '__main__':

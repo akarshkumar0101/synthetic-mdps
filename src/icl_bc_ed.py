@@ -141,7 +141,7 @@ def construct_dataset(include_paths, exclude_paths, d_obs_uni, d_acts_uni, perce
         datasets_test.append(dataset_test)
     dataset_train = {k: np.concatenate([d[k] for d in datasets_train], axis=0) for k in datasets_train[0].keys()}
     dataset_test = {k: np.concatenate([d[k] for d in datasets_test], axis=0) for k in datasets_test[0].keys()}
-    return dataset_train, dataset_test
+    return dataset_train, dataset_test, (obs_mean, obs_std, act_mean, act_std)
 
 
 def sample_batch_from_dataset(rng, dataset, batch_size, ctx_len, seq_len):
@@ -304,7 +304,7 @@ def main(args):
     rng = jax.random.PRNGKey(args.seed)
     # run = wandb.init(entity=args.entity, project=args.project, name=args.name, config=args)
 
-    dataset_train, dataset_test = construct_dataset(args.dataset_paths, args.exclude_dataset_paths,
+    dataset_train, dataset_test, _ = construct_dataset(args.dataset_paths, args.exclude_dataset_paths,
                                                     args.d_obs_uni, args.d_act_uni,
                                                     percent_dataset=(args.percent_dataset, 1.))
     print("----------------------------")
