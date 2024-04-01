@@ -5,8 +5,8 @@ import numpy as np
 
 import experiment_utils
 import icl_bc_ed
-import icl_gen
-import unroll
+# import icl_gen
+# import unroll
 
 txt_header_main = "\n".join(["#!/bin/bash",
                              "source /data/vision/phillipi/akumar01/.virtualenvs/synthetic-mdps/bin/activate",
@@ -495,6 +495,25 @@ def exp_data_procgen(dir_exp):
     return txt_procgen
 
 
+def mlp_bc(dir_exp):
+    domain = 'mujoco'
+    cfgs = []
+    for transform in ["none", "universal"]:
+        for env_id in domain2envs[domain]:
+            cfg = dict(dataset_path=f'{dir_exp}/datasets/{domain}/{env_id}/dataset.pkl',
+                       save_dir=f"{dir_exp}/mlp_bc/{domain}/{env_id}_{transform}", env_id=f"{env_id}-v4",
+                       transform=transform)
+            cfgs.append(cfg)
+    # domain = 'dm_control'
+    # for env_id in domain2envs[domain]:
+    #     cfg = dict(dataset_path=f'{dir_exp}/datasets/{domain}/{env_id}/dataset.pkl',
+    #                save_dir=f"{dir_exp}/mlp_bc/{domain}/{env_id}", env_id=f"dm_control/{env_id}-v0")
+    #     cfgs.append(cfg)
+
+    txt = experiment_utils.create_command_txt_from_configs(cfgs, python_command='python mlp_bc.py')
+    return txt
+
+
 def write_to_nodes_gpus(file, txt, n_nodes=1, n_gpus=1, txt_header=txt_header_main):
     assert n_nodes > 0 and n_gpus > 0
     lines = [line for line in txt.split("\n") if line]
@@ -639,65 +658,68 @@ def main():
     os.makedirs("./experiment/", exist_ok=True)
     dir_exp = "/data/vision/phillipi/akumar01/synthetic-mdps-data"
 
-    with open("./experiment/create_agent_atari.sh", "w") as f:
-        f.write(create_agent_atari(dir_exp))
-    with open("./experiment/create_agent_procgen.sh", "w") as f:
-        f.write(create_agent_procgen(dir_exp))
-    with open("./experiment/create_agent_mujoco.sh", "w") as f:
-        f.write(create_agent_mujoco(dir_exp))
-    with open("./experiment/create_agent_dm_control.sh", "w") as f:
-        f.write(create_agent_dm_control(dir_exp))
-
-    with open("./experiment/collect_data_atari.sh", "w") as f:
-        f.write(collect_data_atari(dir_exp))
-    with open("./experiment/collect_data_procgen.sh", "w") as f:
-        f.write(collect_data_procgen(dir_exp))
-    with open("./experiment/collect_data_mujoco.sh", "w") as f:
-        f.write(collect_data_mujoco(dir_exp))
-    with open("./experiment/collect_data_dm_control.sh", "w") as f:
-        f.write(collect_data_dm_control(dir_exp))
+    # with open("./experiment/create_agent_atari.sh", "w") as f:
+    #     f.write(create_agent_atari(dir_exp))
+    # with open("./experiment/create_agent_procgen.sh", "w") as f:
+    #     f.write(create_agent_procgen(dir_exp))
+    # with open("./experiment/create_agent_mujoco.sh", "w") as f:
+    #     f.write(create_agent_mujoco(dir_exp))
+    # with open("./experiment/create_agent_dm_control.sh", "w") as f:
+    #     f.write(create_agent_dm_control(dir_exp))
+    #
+    # with open("./experiment/collect_data_atari.sh", "w") as f:
+    #     f.write(collect_data_atari(dir_exp))
+    # with open("./experiment/collect_data_procgen.sh", "w") as f:
+    #     f.write(collect_data_procgen(dir_exp))
+    # with open("./experiment/collect_data_mujoco.sh", "w") as f:
+    #     f.write(collect_data_mujoco(dir_exp))
+    # with open("./experiment/collect_data_dm_control.sh", "w") as f:
+    #     f.write(collect_data_dm_control(dir_exp))
 
     # with open("./experiment/collect_data_procgen_sweep_embed_name.sh", "w") as f:
     #     f.write(collect_data_procgen_sweep_embed_name(dir_exp))
     # with open("./experiment/collect_data_procgen_sweep_embed_name_train.sh", "w") as f:
     #     f.write(collect_data_procgen_sweep_embed_name_train(dir_exp))
 
-    with open("./experiment/data_syn.sh", "w") as f:
-        f.write(exp_data_syn(dir_exp))
-    with open("./experiment/data_classic.sh", "w") as f:
-        f.write(exp_data_classic(dir_exp))
-    with open("./experiment/data_minatar.sh", "w") as f:
-        f.write(exp_data_minatar(dir_exp))
+    # with open("./experiment/data_syn.sh", "w") as f:
+    #     f.write(exp_data_syn(dir_exp))
+    # with open("./experiment/data_classic.sh", "w") as f:
+    #     f.write(exp_data_classic(dir_exp))
+    # with open("./experiment/data_minatar.sh", "w") as f:
+    #     f.write(exp_data_minatar(dir_exp))
+    #
+    # for obj in ["bc"]:
+    #     for domain in ["mujoco"]:
+    #         for use_augs in [False, True]:
+    #             for gato in [False, True]:
+    #                 n_iters = {False: int(10e3), True: int(50e3)}[use_augs]
+    #                 with open(f"./experiment/train_{obj}_{domain}_augs={use_augs}_gato={gato}.sh", "w") as f:
+    #                     txt = exp_train(dir_exp, obj=obj, domain=domain, use_augs=use_augs,
+    #                                     gato=gato, n_iters=n_iters, percent_data=0.25)
+    #                     f.write(txt)
 
-    for obj in ["bc"]:
-        for domain in ["mujoco"]:
-            for use_augs in [False, True]:
-                for gato in [False, True]:
-                    n_iters = {False: int(10e3), True: int(50e3)}[use_augs]
-                    with open(f"./experiment/train_{obj}_{domain}_augs={use_augs}_gato={gato}.sh", "w") as f:
-                        txt = exp_train(dir_exp, obj=obj, domain=domain, use_augs=use_augs,
-                                        gato=gato, n_iters=n_iters, percent_data=0.25)
-                        f.write(txt)
-
-    for obj in ["bc"]:
-        for domain in ["csmdp", "dsmdp"]:
-            for use_augs in [False, True]:
-                for gato in [False]:
-                    n_iters = {False: int(5e3), True: int(25e3)}[use_augs]
-                    with open(f"./experiment/train_{obj}_{domain}_augs={use_augs}_gato={gato}.sh", "w") as f:
-                        txt = exp_train(dir_exp, obj=obj, domain=domain, use_augs=use_augs,
-                                        gato=gato, n_iters=n_iters, percent_data=1.0)
-                        f.write(txt)
-
-    with open("./experiment/test_bc_mujoco.sh", "w") as f:
-        f.write(exptest_mujoco(dir_exp, obj="bc", percent_data=0.25))
-    with open("./experiment/test_bc_csmdp.sh", "w") as f:
-        f.write(exptest_csmdpdsmdp(dir_exp, domain_test="csmdp", percent_data=0.25))
-    with open("./experiment/test_bc_dsmdp.sh", "w") as f:
-        f.write(exptest_csmdpdsmdp(dir_exp, domain_test="dsmdp", percent_data=0.25))
+    # for obj in ["bc"]:
+    #     for domain in ["csmdp", "dsmdp"]:
+    #         for use_augs in [False, True]:
+    #             for gato in [False]:
+    #                 n_iters = {False: int(5e3), True: int(25e3)}[use_augs]
+    #                 with open(f"./experiment/train_{obj}_{domain}_augs={use_augs}_gato={gato}.sh", "w") as f:
+    #                     txt = exp_train(dir_exp, obj=obj, domain=domain, use_augs=use_augs,
+    #                                     gato=gato, n_iters=n_iters, percent_data=1.0)
+    #                     f.write(txt)
+    #
+    # with open("./experiment/test_bc_mujoco.sh", "w") as f:
+    #     f.write(exptest_mujoco(dir_exp, obj="bc", percent_data=0.25))
+    # with open("./experiment/test_bc_csmdp.sh", "w") as f:
+    #     f.write(exptest_csmdpdsmdp(dir_exp, domain_test="csmdp", percent_data=0.25))
+    # with open("./experiment/test_bc_dsmdp.sh", "w") as f:
+    #     f.write(exptest_csmdpdsmdp(dir_exp, domain_test="dsmdp", percent_data=0.25))
 
     # with open("./experiment/test_bc.sh", "w") as f:
     #     f.write(exp_test(dir_exp, obj="bc"))
+
+    with open("./experiment/mlp_bc.sh", "w") as f:
+        f.write(mlp_bc(dir_exp))
 
 
 if __name__ == "__main__":

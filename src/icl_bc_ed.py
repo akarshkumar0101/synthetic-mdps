@@ -108,7 +108,7 @@ def transform_dataset(dataset, obs_mean, obs_std, act_mean, act_std, d_obs_uni, 
     act = (act - act_mean) / (act_std + 1e-8)
 
     rng = jax.random.PRNGKey(0)
-    obs_mat = jax.random.orthogonal(rng, max(d_obs, d_obs_uni))[:d_obs_uni, :d_obs]
+    obs_mat = jax.random.orthogonal(rng, max(d_obs, d_obs_uni))[:d_obs_uni, :d_obs]  # not square probably
     act_mat = jax.random.orthogonal(rng, max(d_act, d_act_uni))[:d_act_uni, :d_act]
     obs_mat = obs_mat / np.sqrt(np.diag(obs_mat @ obs_mat.T))[:, None]  # to make sure output is standard normal
     act_mat = act_mat / np.sqrt(np.diag(act_mat @ act_mat.T))[:, None]
@@ -283,6 +283,8 @@ def augment_batch(rng, batch, n_augs, dist="uniform", mat_type='gaussian'):
         elif mat_type == 'orthogonal':
             obs_mat = jax.random.orthogonal(_rng_obs, d_obs)
             act_mat = jax.random.orthogonal(_rng_act, d_act)
+        else:
+            raise NotImplementedError
         return dict(obs=instance['obs'] @ obs_mat.T, act=instance['act'] @ act_mat.T,
                     rew=instance['rew'], done=instance['done'], time=instance['time'])
 
@@ -305,8 +307,8 @@ def main(args):
     # run = wandb.init(entity=args.entity, project=args.project, name=args.name, config=args)
 
     dataset_train, dataset_test, _ = construct_dataset(args.dataset_paths, args.exclude_dataset_paths,
-                                                    args.d_obs_uni, args.d_act_uni,
-                                                    percent_dataset=(args.percent_dataset, 1.))
+                                                       args.d_obs_uni, args.d_act_uni,
+                                                       percent_dataset=(args.percent_dataset, 1.))
     print("----------------------------")
     print(f"Train Dataset shape: {jax.tree_map(lambda x: (type(x), x.shape, x.dtype), dataset_train)}")
     print(f"Test Dataset shape: {jax.tree_map(lambda x: (type(x), x.shape, x.dtype), dataset_test)}")

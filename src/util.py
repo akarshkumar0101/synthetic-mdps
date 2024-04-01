@@ -3,6 +3,7 @@ import pickle
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 
 # taken from https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75
@@ -64,3 +65,16 @@ def calc_entropy_stable(logits, axis=-1):
     probs = jnp.exp(logits)
     logits = jnp.where(probs == 0, 0., logits)  # replace -inf with 0
     return -(probs * logits).sum(axis=axis)
+
+
+def smooth_signal(x, window, kernel='uniform'):
+    if window == 1:
+        return x
+    assert window % 2 == 1
+    before, after = x[:window // 2].mean(), x[-window // 2:].mean()
+    x = np.pad(x, (window // 2, window // 2), mode='constant', constant_values=(before, after))
+    if kernel == 'uniform':
+        kernel = np.ones(window) / window
+    else:
+        raise NotImplementedError
+    return np.convolve(x, kernel, mode='valid')
