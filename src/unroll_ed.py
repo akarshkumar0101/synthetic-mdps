@@ -9,9 +9,9 @@ from jax import config as jax_config
 from jax.random import split
 from tqdm.auto import tqdm
 
+import data_utils
+import util
 from agents.regular_transformer import BCTransformer
-from icl_bc_ed import construct_dataset, sample_batch_from_dataset
-from util import save_pkl
 
 jax_config.update("jax_debug_nans", True)
 
@@ -56,215 +56,85 @@ def main(args):
     d_act = envs.action_space.shape[-1]
     d_obs_uni, d_act_uni = args.d_obs_uni, args.d_act_uni
 
-    dataset_train, dataset_test, (obs_mean, obs_std, act_mean, act_std) = construct_dataset(args.dataset_paths,
-                                                                                            args.exclude_dataset_paths,
-                                                                                            args.d_obs_uni,
-                                                                                            args.d_act_uni,
-                                                                                            percent_dataset=(
-                                                                                                args.percent_dataset,
-                                                                                                1.0))
-
-    print('obs_mean', obs_mean.shape)
-    print('obs_std', obs_std.shape)
-    print('act_mean', act_mean.shape)
-    print('act_std', act_std.shape)
+    dataset_train, _, transform_params = data_utils.construct_dataset(args.dataset_paths, args.exclude_dataset_paths,
+                                                                      args.d_obs_uni, args.d_act_uni,
+                                                                      percent_dataset=(args.percent_dataset, 1.0))
+    transform_params = jax.tree_map(lambda x: jnp.array(x), transform_params)
 
     agent = BCTransformer(d_obs=args.d_obs_uni, d_act=args.d_act_uni,
                           n_layers=args.n_layers, n_heads=args.n_heads, d_embd=args.d_embd, ctx_len=args.ctx_len,
                           mask_type=args.mask_type)
+    agent_forward = jax.jit(jax.vmap(agent.apply, in_axes=(None, 0, 0, 0)))
+
+    batch = data_utils.sample_batch_from_dataset(rng, dataset_train, args.num_envs, args.ctx_len, args.seq_len)
+    print(jax.tree_map(lambda x: x.shape, batch))
+
+    rng, _rng = split(rng)
+    agent_params_random = agent.init(_rng, batch['obs'][0], batch['act'][0], batch['time'][0])
+
     with open(args.load_ckpt, 'rb') as f:
         agent_params = pickle.load(f)['params']
-    print(jax.tree_map(lambda x: x.shape, agent_params))
 
-    rng = jax.random.PRNGKey(0)
-    obs_mat = jax.random.orthogonal(rng, max(d_obs, d_obs_uni))[:d_obs_uni, :d_obs]
-    act_mat = jax.random.orthogonal(rng, max(d_act, d_act_uni))[:d_act_uni, :d_act]
-    obs_mat = obs_mat / np.sqrt(np.diag(obs_mat @ obs_mat.T))[:, None]  # to make sure output is standard normal
-    act_mat = act_mat / np.sqrt(np.diag(act_mat @ act_mat.T))[:, None]
-    obs_mat, act_mat = np.array(obs_mat, dtype=np.float32), np.array(act_mat, dtype=np.float32)
+    T = args.ctx_len - 2
 
-    def transform_obs(obs):
-        obs = (obs - obs_mean) / (obs_std + 1e-8)
-        return obs @ obs_mat.T
+    def sample_weird_batch(rng):
+        _rng1, _rng2 = split(rng)
+        batch1 = data_utils.sample_batch_from_dataset(_rng1, dataset_train, args.num_envs, args.ctx_len, args.seq_len)
+        batch2 = data_utils.sample_batch_from_dataset(_rng2, dataset_train, args.num_envs, args.ctx_len, args.seq_len)
+        batch = jax.tree_map(lambda x: x.copy(), batch1)
+        for key in ['obs', 'act']:
+            batch[key][:, T:] = batch2[key][:, T:]
+        return batch
 
-    def transform_act(act):
-        act = (act - act_mean) / (act_std + 1e-8)
-        return act @ act_mat.T
+    def unroll_agent(agent_params, buffer):
+        buffer = jax.tree_map(lambda x: x.copy(), buffer)
 
-    def inverse_transform_act(act):
-        act = act @ act_mat
-        act = act * act_std + act_mean
-        return act
+        obs, infos = envs.reset()
+        stats = []
+        for _ in tqdm(range(1000)):
+            buffer['obs'][:, T] = data_utils.transform_obs(obs, transform_params[0])
+            out = agent_forward(agent_params, buffer['obs'], buffer['act'], buffer['time'])
+            act_pred = out['act_now_pred'][:, T - 1]
+            act_original = data_utils.inverse_transform_act(act_pred, transform_params[0])
+            obs, rew, term, trunc, infos = envs.step(act_original)
 
-    obs, info = envs.reset()
-    rews = []
-    for i in tqdm(range(1000)):
-        act = envs.action_space.sample()
-        act = act + np.random.normal(size=act.shape)
-        obs, rew, term, trunc, info = envs.step(act)
-        rews.append(rew)
-    rews = np.stack(rews, axis=-1)
-    print("Random policy: ")
-    print(rews.sum(axis=-1).mean())
+            if "final_info" in infos:
+                for info in infos["final_info"]:
+                    if info and "episode" in info:
+                        stats.append((info["episode"]["r"], info["episode"]["l"]))
+        return np.array(stats)
 
-    buffer = sample_batch_from_dataset(rng, dataset_train, args.num_envs, 512, 512)
-    print(jax.tree_map(lambda x: x.shape, buffer))
-
-    agent_forward = jax.jit(jax.vmap(agent.apply, in_axes=(None, 0, 0, 0)))
-    out = agent_forward(agent_params, buffer['obs'], buffer['act'], buffer['time'])
-    print(jax.tree_map(lambda x: x.shape, out))
-
-    print("Action Loss: ")
-    mse = ((out['act_now'] - out['act_now_pred']) ** 2).mean(axis=(0, -1))
-    print(f"{mse[0]=}, {mse[-1]=}, {mse.mean()=}")
-    print("Observation Loss: ")
-    mse = ((out['obs_nxt'] - out['obs_nxt_pred']) ** 2).mean(axis=(0, -1))
-    print(f"{mse[0]=}, {mse[-1]=}, {mse.mean()=}")
-
-    t = 505
-    print('heheheh--------------------------------------------------------------------------------')
-
-    obs, info = envs.reset()
-    buffer['obs'][:, t] = transform_obs(obs)
-    rews = []
-    for i in tqdm(range(1000)):
-        out = agent_forward(agent_params, buffer['obs'], buffer['act'], buffer['time'])
-        act = out['act_now_pred'][:, t - 1]
-
-        envact = inverse_transform_act(act)
-        envact = envact + np.random.normal(size=envact.shape)
-        obs, rew, term, trunc, info = envs.step(envact)
-
-        buffer['act'][:, t] = act
-
-        # t = t + 1
-        buffer['obs'][:, t] = transform_obs(obs)
-
-        rews.append(rew)
-    rews = np.stack(rews, axis=-1)
-    print("Agent policy: ")
-    print(rews.sum(axis=-1).mean())
-
-
-    # rng = jax.random.PRNGKey(1000)
-    # buffer2 = sample_batch_from_dataset(rng, dataset_test, args.num_envs, 512, 512)
-    #
-    # my_act, optimal_act = [], []
-    # obs = buffer2['obs'][:, 0]
-    # buffer['obs'][:, t] = obs
-    # rews = []
-    # for i in tqdm(range(255)):
-    #     out = agent_forward(agent_params, buffer['obs'], buffer['act'], buffer['time'])
-    #     act = out['act_now_pred'][:, t - 1]
-    #
-    #     my_act.append(act)
-    #     optimal_act.append(buffer2['act'][:, i])
-    #
-    #     # obs, rew, term, trunc, info = envs.step(inverse_transform_act(act))
-    #     obs = buffer2['obs'][:, i+1]
-    #
-    #     buffer['act'][:, t] = act
-    #
-    #     t = t + 1
-    #     buffer['obs'][:, t] = obs
-    #
-    # my_act = np.stack(my_act, axis=1)
-    # optimal_act = np.stack(optimal_act, axis=1)
-    # print(my_act.shape, optimal_act.shape)
-    # print(((my_act - optimal_act) ** 2).mean())
-    # print(((my_act - optimal_act) ** 2).mean(axis=(0, -1)))
-
-
-
-
-    return
-
-    obs_mean, obs_std = dataset['obs'].mean(axis=(0, 1)), dataset['obs'].std(axis=(0, 1))
-    expert_batch = sample_batch_from_dataset(jax.random.PRNGKey(0), dataset, args.n_envs, args.ctx_len // 2)
-
-    with open(args.ckpt_path, 'rb') as f:
-        agent_params = pickle.load(f)['params']
-
-    rng = jax.random.PRNGKey(0)
-    obs_mat = jax.random.orthogonal(rng, n=max(d_obs, args.d_obs_uni), shape=())[:args.d_obs_uni, :d_obs]
-    rng = jax.random.PRNGKey(1)
-    obs_mat_aug = jax.random.normal(rng, (args.d_obs_uni, args.d_obs_uni)) * jnp.sqrt(1. / args.d_obs_uni)
-
-    def t_obs(obs):
-        obs = (obs - obs_mean) / (obs_std + 1e-5)
-        obs = obs @ obs_mat.T
-        obs = obs @ obs_mat_aug.T
-        return obs
-
-    def t_act(act):
-        return act
-
-    env_step = jax.jit(jax.vmap(env.step, in_axes=(0, 0, 0, None)))
-    agent_forward = jax.jit(jax.vmap(agent.apply, in_axes=(None, 0, 0)))
-
-    obs, state = jax.vmap(env.reset, in_axes=(0, None))(split(_rng, args.n_envs), env_params)
-    # obs = ((obs - obs_mean) / (obs_std + 1e-5)) @ obs_mat.T
-
-    # x_obs, x_act = [obs], [act0]
-
-    act0 = jnp.zeros((args.n_envs,), dtype=int)
-    print(expert_batch['obs'].shape, expert_batch['act'].shape, expert_batch['logits'].shape)
-
-    x_obs = [expert_batch['obs'][:, i] for i in range(512)]
-    x_act = [expert_batch['act'][:, i] for i in range(512)]
-    x_obs.append(obs)
-    x_act.append(act0)
-    x_obs, x_act = x_obs[-T:], x_act[-T:]
-
-    print(jnp.stack(x_obs, axis=1).shape, jnp.stack(x_act, axis=1).shape)
-
-    rews, dones, rets = [], [], []
-
-    pbar = tqdm(range(args.n_iters))
-    for t in pbar:
-        len_obs = len(x_obs)
-        if len_obs < T:
-            x_obsv = jnp.stack(x_obs + [obs] * (T - len_obs), axis=1)
-            x_actv = jnp.stack(x_act + [act0] * (T - len_obs), axis=1)
-            x_obsv = t_obs(x_obsv)
-            x_actv = t_act(x_actv)
-
-            logits = agent_forward(agent_params, x_obsv, x_actv)
-            # logits = jnp.zeros_like(logits)
+    def test_loss(agent_params, rng, n_iters=500):
+        out = []
+        for i_iter in tqdm(range(n_iters)):
             rng, _rng = split(rng)
-            act = jax.random.categorical(_rng, logits[:, len_obs - 1, :n_acts])
-        else:
-            x_obsv, x_actv = jnp.stack(x_obs, axis=1), jnp.stack(x_act, axis=1)
-            x_obsv = t_obs(x_obsv)
-            x_actv = t_act(x_actv)
-            # print(x_actv[0])
-            logits = agent_forward(agent_params, x_obsv, x_actv)
-            # logits = jnp.zeros_like(logits)
-            rng, _rng = split(rng)
-            act = jax.random.categorical(_rng, logits[:, -1, :n_acts])
-            # act = logits[:, time, :2].argmax(axis=-1)
+            batch = sample_weird_batch(_rng)
+            outi = agent_forward(agent_params, batch['obs'], batch['act'], batch['time'])
+            out.append(outi)
+        out = util.tree_cat(out)
 
-        rng, _rng = split(rng)
-        obs, state, rew, done, info = env_step(split(_rng, args.n_envs), state, act, env_params)
-        rets.append(info['returned_episode_returns'])
-        rews.append(rew)
-        dones.append(done)
+        act = out['act_now'][:, :, :]
+        act_pred = out['act_now_pred'][:, :, :]
 
-        x_obs.append(obs)
-        x_act[-1] = act
-        x_act.append(act0)
-        x_obs, x_act = x_obs[-T:], x_act[-T:]
+        mse = ((act - act_pred) ** 2).mean(axis=-1).mean(axis=0)
+        print(f"Action Loss Universal: ctx_mean: {mse.mean(): .4f}, ctx_T: {mse[T - 1]: .4f}")
 
-        pbar.set_postfix(rets=rets[-1].mean())
-        print(info['returned_episode_returns'])
+        act = data_utils.inverse_transform_act(act, transform_params[0])
+        act_pred = data_utils.inverse_transform_act(act_pred, transform_params[0])
+        mse = ((act - act_pred) ** 2).mean(axis=-1).mean(axis=0)
+        print(f"Action Loss  Original: ctx_mean: {mse.mean(): .4f}, ctx_T: {mse[T - 1]: .4f}")
 
-    rews = jnp.stack(rews, axis=0)
-    dones = jnp.stack(dones, axis=0)
-    rets = jnp.stack(rets, axis=0)
-    rets = np.asarray(rets[-500:, :]).mean(axis=0)
+    print("------------ RANDOM AGENT ------------")
+    test_loss(agent_params_random, jax.random.PRNGKey(0))
 
-    save_pkl(args.save_dir, "rets", rets)
-    print(f"Score: {rets.mean()}")
+    # stats = unroll_agent(agent_params_random, buffer1)
+    # print(f"Mean Return: {stats[:, 0].mean(): .4f}, Mean Length: {stats[:, 1].mean(): .4f}")
+
+    print("------------ LOADED AGENT ------------")
+    test_loss(agent_params, jax.random.PRNGKey(0))
+
+    # stats = unroll_agent(agent_params, buffer1)
+    # print(f"Mean Return: {stats[:, 0].mean(): .4f}, Mean Length: {stats[:, 1].mean(): .4f}")
 
 
 def make_env(env_id, idx, capture_video, run_name, gamma):
@@ -284,6 +154,80 @@ def make_env(env_id, idx, capture_video, run_name, gamma):
         return env
 
     return thunk
+
+
+def do_rollout(agent, agent_params, env_id, dataset_train, dataset_test, transform_params,
+               num_envs=8, video_dir=None, seed=0, ctx_len=256, seq_len=256):
+    rng = jax.random.PRNGKey(seed)
+    envs = gym.vector.SyncVectorEnv(
+        [make_env(env_id, i, False, None, 0.99) for i in range(num_envs)]
+    )
+    transform_params = jax.tree_map(lambda x: jnp.array(x), transform_params)
+
+    agent_forward = jax.jit(jax.vmap(agent.apply, in_axes=(None, 0, 0, 0)))
+
+    T = ctx_len - 2
+
+    def sample_weird_batch(rng):
+        _rng1, _rng2 = split(rng)
+        batch1 = data_utils.sample_batch_from_dataset(_rng1, dataset_train, num_envs, ctx_len, seq_len)
+        batch2 = data_utils.sample_batch_from_dataset(_rng2, dataset_train, num_envs, ctx_len, seq_len)
+        batch = jax.tree_map(lambda x: x.copy(), batch1)
+        for key in ['obs', 'act']:
+            batch[key][:, T:] = batch2[key][:, T:]
+        return batch
+
+    def unroll_agent(agent_params, buffer):
+        buffer = jax.tree_map(lambda x: x.copy(), buffer)
+
+        obs, infos = envs.reset()
+        stats = []
+        for _ in tqdm(range(1000), desc="Rollout"):
+            buffer['obs'][:, T] = data_utils.transform_obs(obs, transform_params[0])
+            out = agent_forward(agent_params, buffer['obs'], buffer['act'], buffer['time'])
+            act_pred = out['act_now_pred'][:, T - 1]
+            act_original = data_utils.inverse_transform_act(act_pred, transform_params[0])
+            obs, rew, term, trunc, infos = envs.step(act_original)
+
+            if "final_info" in infos:
+                for info in infos["final_info"]:
+                    if info and "episode" in info:
+                        stats.append((info["episode"]["r"], info["episode"]["l"]))
+        return np.array(stats)
+
+    def test_loss(agent_params, batch):
+        out = agent_forward(agent_params, batch['obs'], batch['act'], batch['time'])
+        mse_act = ((out['act_now'] - out['act_now_pred']) ** 2).mean(axis=-1).mean(axis=0)
+        mse_obs = ((out['obs_nxt'] - out['obs_nxt_pred']) ** 2).mean(axis=-1).mean(axis=0)
+        return np.array(mse_act), np.array(mse_obs)
+
+    def unroll_agent_multi(agent_params, rng, n_iters):
+        stats = []
+        for i_iter in range(n_iters):
+            rng, _rng = split(rng)
+            batch = sample_weird_batch(_rng)
+            statsi = unroll_agent(agent_params, batch)
+            stats.append(statsi)
+        return np.concatenate(stats)
+
+    def test_loss_multi(agent_params, rng, n_iters):
+        mse_act, mse_obs = [], []
+        for i_iter in tqdm(range(n_iters), desc="Test Loss"):
+            rng, _rng = split(rng)
+            batch = sample_weird_batch(_rng)
+            out = agent_forward(agent_params, batch['obs'], batch['act'], batch['time'])
+            mse_acti = ((out['act_now'] - out['act_now_pred']) ** 2).mean(axis=-1).mean(axis=0)
+            mse_obsi = ((out['obs_nxt'] - out['obs_nxt_pred']) ** 2).mean(axis=-1).mean(axis=0)
+            mse_act.append(mse_acti)
+            mse_obs.append(mse_obsi)
+        return np.stack(mse_act, axis=0).mean(axis=0), np.stack(mse_obs, axis=0).mean(axis=0)
+
+    mse_act, mse_obs = test_loss_multi(agent_params, jax.random.PRNGKey(0), 100)
+    stats = unroll_agent_multi(agent_params, jax.random.PRNGKey(0), 1)
+    print("MSE Action: ", mse_act.mean())
+    print("MSE Action final: ", mse_act[-1].item())
+    print("Rollout score: ", stats[:, 0].mean())
+    return mse_act, mse_obs, stats
 
 
 if __name__ == '__main__':

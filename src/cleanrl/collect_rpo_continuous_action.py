@@ -192,6 +192,7 @@ if __name__ == "__main__":
         with torch.no_grad():
             next_obs = (next_obs - obs_mean) / torch.sqrt(obs_var + 1e-8)
             action, logprob, _, value, action_mean = agent.get_action_and_value(next_obs)
+            action = action_mean  # use action_mean instead
             values[step] = value.flatten().cpu().numpy()
         actions[step] = action.cpu().numpy()
         actions_means[step] = action_mean.cpu().numpy()

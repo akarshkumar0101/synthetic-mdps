@@ -106,37 +106,48 @@ def train_test_split(dataset, percent_train=0.8):
     return dataset_train, dataset_test
 
 
-def get_percent_dataset(dataset, percent_dataset_vert=0.1, percent_dataset_horz=0.1):
+def get_percent_dataset(dataset, percent_dataset_vert=1.0, percent_dataset_horz=1.0):
     N, T, _ = dataset['obs'].shape
     n, t = int(N * percent_dataset_vert), int(T * percent_dataset_horz)
     return jax.tree_map(lambda x: x[:n, :t], dataset)
 
 
-def construct_dataset(include_paths, exclude_paths, d_obs_uni, d_acts_uni, percent_dataset=(1., 1.)):
+def construct_dataset(include_paths, exclude_paths, d_obs_uni, d_acts_uni, nvh=None):
+    if isinstance(include_paths, str):
+        include_paths = [include_paths]
+    if isinstance(exclude_paths, str):
+        exclude_paths = [exclude_paths]
+
     include_paths = [os.path.abspath(p) for i in include_paths for p in glob.glob(i)]
     exclude_paths = [os.path.abspath(p) for i in exclude_paths for p in glob.glob(i)]
+
     paths = sorted(set(include_paths) - set(exclude_paths))
     print(f"Found {len(paths)} datasets")
     assert len(paths) > 0
-    datasets_train, datasets_test = [], []
+    datasets_train, datasets_test, transform_params = [], [], []
     for path in paths:
         print(f"Loading dataset from {path}")
         dataset = load_dataset(path)
         print(f"Dataset shape: {jax.tree_map(lambda x: (x.shape, x.dtype), dataset)}")
         dataset_train, dataset_test = train_test_split(dataset, percent_train=0.8)
-        obs_mean, obs_std = dataset_train['obs'].mean(axis=(0, 1)), dataset_train['obs'].std(axis=(0, 1))
-        act_mean, act_std = dataset_train['act'].mean(axis=(0, 1)), dataset_train['act'].std(axis=(0, 1))
+        transform_params_i = get_dataset_transform_params(jax.random.PRNGKey(0), dataset_train, d_obs_uni, d_acts_uni)
+        transform_params_i = jax.tree_map(lambda x: np.array(x, dtype=jnp.float32), transform_params_i)
 
-        pv, ph = percent_dataset
-        dataset_train = get_percent_dataset(dataset_train, percent_dataset_vert=pv, percent_dataset_horz=ph)
+        if nvh is not None:
+            nv, nh = nvh
+            dataset_train = jax.tree_map(lambda x: x[:nv, :nh], dataset_train)
+        # dataset_train = get_percent_dataset(dataset_train, percent_dataset_vert=pv, percent_dataset_horz=ph)
 
-        dataset_train = transform_dataset(dataset_train, obs_mean, obs_std, act_mean, act_std, d_obs_uni, d_acts_uni)
-        dataset_test = transform_dataset(dataset_test, obs_mean, obs_std, act_mean, act_std, d_obs_uni, d_acts_uni)
+        dataset_train = transform_dataset(dataset_train, transform_params_i)
+        dataset_test = transform_dataset(dataset_test, transform_params_i)
+
         datasets_train.append(dataset_train)
         datasets_test.append(dataset_test)
+        transform_params.append(transform_params_i)
+
     dataset_train = {k: np.concatenate([d[k] for d in datasets_train], axis=0) for k in datasets_train[0].keys()}
     dataset_test = {k: np.concatenate([d[k] for d in datasets_test], axis=0) for k in datasets_test[0].keys()}
-    return dataset_train, dataset_test, (obs_mean, obs_std, act_mean, act_std)
+    return dataset_train, dataset_test, transform_params
 
 
 def sample_batch_from_dataset(rng, dataset, batch_size, ctx_len, seq_len):

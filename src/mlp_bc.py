@@ -21,7 +21,7 @@ parser.add_argument("--dataset_path", type=str, default=None)
 parser.add_argument("--save_dir", type=str, default=None)
 parser.add_argument("--env_id", type=str, default="HalfCheetah-v4")
 
-parser.add_argument("--d_obs_uni", type=int, default=64)
+parser.add_argument("--d_obs_uni", type=int, default=128)
 parser.add_argument("--d_act_uni", type=int, default=21)
 
 parser.add_argument("--transform", type=str, default="none")
