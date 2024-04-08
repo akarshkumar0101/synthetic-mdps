@@ -188,6 +188,7 @@ def main(args):
         metrics_before.append(metrics)
     save_pkl(args.save_dir, "metrics_before", tree_stack(metrics_before))
 
+    rollout_data = []
     # --------------------------- TRAINING ---------------------------
     pbar = tqdm(range(args.n_iters + 1), desc="Training")
     for i_iter in pbar:
@@ -201,6 +202,7 @@ def main(args):
                                                            dataset_test, transform_params,
                                                            num_envs=8, video_dir=None, seed=0, ctx_len=args.ctx_len,
                                                            seq_len=args.seq_len)
+            rollout_data.append(dict(i_iter=i_iter, mse_act=mse_act, mse_obs=mse_obs, stats=stats))
 
         rng, batch = sample_train_batch(rng)
         train_state, metrics_train_i = iter_train(train_state, batch)
@@ -219,6 +221,7 @@ def main(args):
         if i_iter % 1000 == 0 or i_iter == args.n_iters:
             save_pkl(args.save_dir, "metrics_train", tree_stack(metrics_train))
             save_pkl(args.save_dir, "metrics_test", tree_stack(metrics_test))
+            save_pkl(args.save_dir, "rollout_data", rollout_data)
 
     # --------------------------- AFTER TRAINING ---------------------------
     pbar = tqdm(range(args.n_iters_eval), desc="After Training")

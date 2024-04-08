@@ -195,7 +195,7 @@ def exp_train(dir_exp, obj='bc', domain='mujoco', use_augs=True, gato=False,
 
 def exptest_mujoco(dir_exp, obj='bc', domain='mujoco', train_use_augs=True, train_gato=False,
                    n_iters_eval=300, n_iters=2000,
-                   bs=64, ctx_len=256, n_ckpts=1, percent_data=1.0, nv=1, nh=1024):
+                   bs=64, ctx_len=256, n_ckpts=0, nv=100000, nh=100000):
     cfg_default = vars(icl_bc_ed.parse_args())
 
     n_augs = 0
@@ -226,7 +226,8 @@ def exptest_mujoco(dir_exp, obj='bc', domain='mujoco', train_use_augs=True, trai
                 save_dir=save_dir,
                 n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, n_ckpts=n_ckpts, n_augs=n_augs,
                 bs=bs, ctx_len=ctx_len, seq_len=ctx_len,
-                percent_data=percent_data, nv=nv, nh=nh,
+                nv=nv, nh=nh,
+                env_id=f"{env_id}-v4", n_iters_rollout=100,
             )
             cfgs.append(cfg)
     txt = experiment_utils.create_command_txt_from_configs(cfgs, python_command='python icl_bc_ed.py')
@@ -234,8 +235,8 @@ def exptest_mujoco(dir_exp, obj='bc', domain='mujoco', train_use_augs=True, trai
 
 
 def exptest_csmdpdsmdp(dir_exp, obj='bc', domain_test='csmdp', domain='mujoco', train_use_augs=True, train_gato=False,
-                       n_iters_eval=300, n_iters=2000,
-                       bs=64, ctx_len=256, n_ckpts=1, percent_data=1.0, nv=1, nh=1024):
+                       n_iters_eval=300, n_iters=1000,
+                       bs=64, ctx_len=256, n_ckpts=0, nv=100000, nh=100000):
     cfg_default = vars(icl_bc_ed.parse_args())
 
     n_augs = 0
@@ -262,7 +263,8 @@ def exptest_csmdpdsmdp(dir_exp, obj='bc', domain_test='csmdp', domain='mujoco', 
                     save_dir=save_dir,
                     n_iters=n_iters, n_iters_eval=n_iters_eval, obj=obj, n_ckpts=n_ckpts, n_augs=n_augs,
                     bs=bs, ctx_len=ctx_len, seq_len=ctx_len,
-                    percent_data=percent_data, nv=nv, nh=nh,
+                    nv=nv, nh=nh,
+                    env_id=f"{env_id}-v4", n_iters_rollout=100,
                 )
                 cfgs.append(cfg)
     txt = experiment_utils.create_command_txt_from_configs(cfgs, python_command='python icl_bc_ed.py')
@@ -709,11 +711,11 @@ def main():
                         f.write(txt)
 
     with open("./experiment/test_bc_mujoco.sh", "w") as f:
-        f.write(exptest_mujoco(dir_exp, obj="bc", percent_data=0.25))
+        f.write(exptest_mujoco(dir_exp, obj="bc"))
     with open("./experiment/test_bc_csmdp.sh", "w") as f:
-        f.write(exptest_csmdpdsmdp(dir_exp, domain_test="csmdp", percent_data=0.25))
+        f.write(exptest_csmdpdsmdp(dir_exp, domain_test="csmdp"))
     with open("./experiment/test_bc_dsmdp.sh", "w") as f:
-        f.write(exptest_csmdpdsmdp(dir_exp, domain_test="dsmdp", percent_data=0.25))
+        f.write(exptest_csmdpdsmdp(dir_exp, domain_test="dsmdp"))
 
     with open("./experiment/test_bc.sh", "w") as f:
         f.write(exp_test(dir_exp, obj="bc"))

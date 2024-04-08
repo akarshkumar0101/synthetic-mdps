@@ -21,7 +21,7 @@ def load_dataset(path):
     act_key = 'logits' if 'logits' in dataset else 'act_mean'
     obs, act, rew, done = dataset['obs'], dataset[act_key], dataset['rew'], dataset['done']
     N, T, Do = obs.shape
-    time = repeat(jnp.arange(T), 'T -> N T', N=N)
+    time = repeat(np.arange(T), 'T -> N T', N=N)
     return dict(obs=obs, act=act, rew=rew, done=done, time=time)
 
 
