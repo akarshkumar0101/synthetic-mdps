@@ -23,18 +23,20 @@ class Block(nn.Module):
         self.mlp = MLP()
         self.ln2 = nn.LayerNorm()
 
-    def __call__(self, x):
+    def __call__(self, kv, q=None):
+        if q is None:
+            q = kv
+
         if self.mask_type == "causal":
-            mask = jnp.tril(jnp.ones((x.shape[0], x.shape[0]), dtype=bool))
+            print("Using causal mask")
+            mask = jnp.tril(jnp.ones((q.shape[0], kv.shape[0]), dtype=bool))
         elif self.mask_type == "eye":
-            mask = jnp.eye(x.shape[0], dtype=bool)
+            print("Using eye mask")
+            mask = jnp.eye(q.shape[0], dtype=bool)
         else:
             raise NotImplementedError
 
-        # x = x + self.mha(self.ln1(x))
-        temp = self.ln1(x)
-        x = x + self.mha(temp, temp, mask=mask)  # TODO: use new version of jax so we don't need to do this
-
+        x = q + self.mha(self.ln1(q), self.ln1(kv), mask=mask, sow_weights=True)
         x = x + self.mlp(self.ln2(x))
         return x
 
