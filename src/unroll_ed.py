@@ -137,11 +137,11 @@ def main(args):
     # print(f"Mean Return: {stats[:, 0].mean(): .4f}, Mean Length: {stats[:, 1].mean(): .4f}")
 
 
-def make_env(env_id, idx, capture_video, run_name, gamma):
+def make_env(env_id, idx, vid_name, gamma):
     def thunk():
-        if capture_video and idx == 0:
+        if vid_name is not None and idx == 0:
             env = gym.make(env_id, render_mode="rgb_array")
-            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
+            env = gym.wrappers.RecordVideo(env, vid_name)
         else:
             env = gym.make(env_id)
         env = gym.wrappers.FlattenObservation(env)  # deal with dm_control's Dict observation space
@@ -228,6 +228,65 @@ def do_rollout(agent, agent_params, env_id, dataset_train, dataset_test, transfo
     print("MSE Action final: ", mse_act[-1].item())
     print("Rollout score: ", stats[:, 0].mean())
     return mse_act, mse_obs, stats
+
+
+def rollout_transformer(agent, agent_params, env_id, transform_params, prompt=None,
+                        num_envs=8, num_steps=1000, vid_name=None, seed=0):
+    rng = jax.random.PRNGKey(seed)
+    envs = gym.vector.SyncVectorEnv(
+        [make_env(env_id, i, vid_name, 0.99) for i in range(num_envs)]
+    )
+    transform_params = jax.tree_map(lambda x: jnp.array(x), transform_params)
+    agent_forward = jax.jit(jax.vmap(agent.apply, in_axes=(None, 0, 0, 0)))
+
+    if prompt is None:
+        prompt_obs = jnp.zeros((num_envs, 0, d_obs))
+        prompt_act = jnp.zeros((num_envs, 0, d_act))
+    else:
+        prompt_obs, prompt_act = prompt
+    prompt_len = prompt_obs.shape[1]
+
+    ctx_len = agent.ctx_len - prompt_len
+    
+    def get_act_pred(obs_list, act_list):
+        obs_v, act_v = jnp.stack(obs_list, axis=1), jnp.stack(act_list, axis=1)
+        
+        T = obs_v.shape[1]
+        if T<ctx_len:
+            obs_filler = jnp.zeros((num_envs, ctx_len-T, agent.d_obs))
+            act_filler = jnp.zeros((num_envs, ctx_len-T, agent.d_act))
+            obs_v = jnp.concatenate([prompt_obs, obs_v, obs_filler], axis=1)
+            act_v = jnp.concatenate([prompt_act, act_v, act_filler], axis=1)
+        elif T==ctx_len:
+            obs_v = jnp.concatenate([prompt_obs, obs_v], axis=1)
+            act_v = jnp.concatenate([prompt_act, act_v], axis=1)
+        else:
+            raise NotImplementedError
+        
+        out = agent_forward(agent_params, obs_v, act_v, None)
+        return out['act_pred'][:, prompt_len+T-1]
+
+    stats = []
+    
+    obs_list, act_list = [], []
+
+    obs, infos = envs.reset()
+    for _ in tqdm(range(num_steps), desc="Rollout"):
+        obs_list.append(data_utils.transform_obs(obs, transform_params))
+        act_list.append(jnp.zeros((num_envs, agent.d_act)))
+        obs_list, act_list = obs_list[-ctx_len:], act_list[-ctx_len:]
+        
+        act_pred = get_act_pred(obs_list, act_list)
+        act_list[-1] = act_pred
+        
+        act_original = data_utils.inverse_transform_act(act_pred, transform_params)
+        obs, rew, term, trunc, infos = envs.step(act_original)
+
+        if "final_info" in infos:
+            for info in infos["final_info"]:
+                if info and "episode" in info:
+                    stats.append((info["episode"]["r"], info["episode"]["l"]))
+    return np.array(stats)[:, 0]
 
 
 if __name__ == '__main__':

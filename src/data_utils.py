@@ -150,19 +150,28 @@ def construct_dataset(include_paths, exclude_paths, d_obs_uni, d_acts_uni, nvh=N
     return dataset_train, dataset_test, transform_params
 
 
-def sample_batch_from_dataset(rng, dataset, batch_size, ctx_len, seq_len):
+# def sample_batch_from_dataset(rng, dataset, batch_size, ctx_len, seq_len):
+#     rng, _rng1, _rng2 = split(rng, 3)
+#     n_e, n_t, *_ = dataset['obs'].shape
+#     i_e = jax.random.randint(_rng1, (batch_size, 1), minval=0, maxval=n_e)
+#     i_t = jax.random.randint(_rng2, (batch_size, 1), minval=0, maxval=n_t - seq_len)
+
+#     def get_instance_i_h(rng):
+#         return jax.random.permutation(rng, seq_len)[:ctx_len].sort()
+
+#     i_h = jax.vmap(get_instance_i_h)(split(rng, batch_size))
+
+#     i_e = i_e
+#     i_t = i_t + i_h
+#     batch = jax.tree_map(lambda x: x[i_e, i_t, ...], dataset)
+#     return batch
+
+def sample_batch_from_dataset(rng, dataset, batch_size, ctx_len):
     rng, _rng1, _rng2 = split(rng, 3)
     n_e, n_t, *_ = dataset['obs'].shape
-    i_e = jax.random.randint(_rng1, (batch_size,), minval=0, maxval=n_e)
-    i_t = jax.random.randint(_rng2, (batch_size,), minval=0, maxval=n_t - seq_len)
-
-    def get_instance_i_h(rng):
-        return jax.random.permutation(rng, seq_len)[:ctx_len].sort()
-
-    i_h = jax.vmap(get_instance_i_h)(split(rng, batch_size))
-
-    i_e = i_e[:, None]
-    i_t = i_t[:, None] + i_h
+    i_e = jax.random.randint(_rng1, (batch_size, 1), minval=0, maxval=n_e)
+    i_t = jax.random.randint(_rng2, (batch_size, 1), minval=0, maxval=n_t - ctx_len)
+    i_t = i_t + jnp.arange(ctx_len)
     batch = jax.tree_map(lambda x: x[i_e, i_t, ...], dataset)
     return batch
 
