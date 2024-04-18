@@ -41,6 +41,7 @@ group.add_argument("--aug_dist", type=str, default="uniform")
 group.add_argument("--n_segs", type=int, default=1)
 group.add_argument("--nv", type=int, default=4096)
 group.add_argument("--nh", type=int, default=131072)
+group.add_argument("--seg_diff_envs", type=lambda x: x=='True', default=False)
 
 group = parser.add_argument_group("optimization")
 group.add_argument("--n_iters_eval", type=int, default=100)
@@ -144,7 +145,10 @@ def main(args):
     def sample_batch_segments_from_dataset(rng, dataset, batch_size, n_segs, seg_len):
         rng, _rng1, _rng2 = split(rng, 3)
         n_e, n_t, *_ = dataset['obs'].shape
-        i_e = jax.random.randint(_rng1, (batch_size, 1, 1), minval=0, maxval=n_e)
+        if args.seg_diff_envs:
+            i_e = jax.random.randint(_rng1, (batch_size, n_segs, 1), minval=0, maxval=n_e)
+        else:
+            i_e = jax.random.randint(_rng1, (batch_size, 1, 1), minval=0, maxval=n_e)
         i_t = jax.random.randint(_rng2, (batch_size, n_segs, 1), minval=0, maxval=n_t - seg_len)
         i_t = i_t + jnp.arange(seg_len)
         batch = jax.tree_map(lambda x: x[i_e, i_t, ...], dataset)
@@ -152,21 +156,15 @@ def main(args):
 
     def sample_test_batch(rng):
         rng, _rng_batch, _rng_aug = split(rng, 3)
-        # batch = data_utils.sample_batch_from_dataset(_rng_batch, dataset_test, args.bs, args.ctx_len)
-        # batch = data_utils.sample_batch_from_dataset(_rng_batch, dataset_test, args.bs*args.n_segs, args.ctx_len//args.n_segs)
-
-        # batch = sample_batch_segments_from_dataset(_rng_batch, dataset_test, args.bs, args.n_segs, args.ctx_len//args.n_segs)
-        # batch = jax.tree_map(lambda x: rearrange(x, '(b s) t ... -> b (s t) ...', s=args.n_segs), batch)
-        batch = data_utils.sample_batch_from_dataset(_rng_batch, dataset_test, args.bs*args.n_segs, args.ctx_len//args.n_segs)
-        batch = jax.tree_map(lambda x: rearrange(x, '(b s) t ... -> b (s t) ...', s=args.n_segs), batch)
+        batch = sample_batch_segments_from_dataset(_rng_batch, dataset_test, args.bs, args.n_segs, args.ctx_len//args.n_segs)
+        batch = jax.tree_map(lambda x: rearrange(x, 'b s t ... -> b (s t) ...'), batch)
         batch = data_utils.augment_batch(_rng_aug, batch, 0)
         return rng, batch
 
     def sample_train_batch(rng):
         rng, _rng_batch, _rng_aug = split(rng, 3)
-        # batch = data_utils.sample_batch_from_dataset(_rng_batch, dataset_train, args.bs, args.ctx_len)
-        batch = data_utils.sample_batch_from_dataset(_rng_batch, dataset_train, args.bs*args.n_segs, args.ctx_len//args.n_segs)
-        batch = jax.tree_map(lambda x: rearrange(x, '(b s) t ... -> b (s t) ...', s=args.n_segs), batch)
+        batch = sample_batch_segments_from_dataset(_rng_batch, dataset_train, args.bs, args.n_segs, args.ctx_len//args.n_segs)
+        batch = jax.tree_map(lambda x: rearrange(x, 'b s t ... -> b (s t) ...'), batch)
         batch = data_utils.augment_batch(_rng_aug, batch, args.n_augs, dist=args.aug_dist)
         return rng, batch
 
@@ -196,9 +194,7 @@ def main(args):
             #                                                num_envs=8, video_dir=None, seed=0, ctx_len=args.ctx_len,
             #                                                seq_len=args.seq_len)
             num_envs = 1024
-            batch = data_utils.sample_batch_from_dataset(rng, dataset_test, num_envs*args.n_segs, args.ctx_len//args.n_segs)
-            batch = jax.tree_map(lambda x: rearrange(x, '(b s) t ... -> b s t ...', s=args.n_segs), batch)
-            batch = jax.tree_map(lambda x: x[:, :-1, :, ...], batch)
+            batch = sample_batch_segments_from_dataset(rng, dataset_test, num_envs, args.n_segs-1, args.ctx_len//args.n_segs)
             batch = jax.tree_map(lambda x: rearrange(x, 'b s t ... -> b (s t) ...'), batch)
             vid_name = f"{args.save_dir}/videos/{i_iter}" if args.save_dir and args.video else None
             rets = unroll_ed.rollout_transformer(agent, train_state.params, args.env_id, transform_params[0],

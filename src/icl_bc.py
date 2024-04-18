@@ -49,9 +49,9 @@ parser.add_argument("--obj", type=str, default="bc")  # bc or wm
 # Model arguments
 group = parser.add_argument_group("model")
 group.add_argument("--n_layers", type=int, default=4)
-group.add_argument("--n_heads", type=int, default=8)
+group.add_argument("--n_heads", type=int, default=4)
 group.add_argument("--d_embd", type=int, default=256)
-group.add_argument("--ctx_len", type=int, default=128)
+group.add_argument("--ctx_len", type=int, default=256)
 group.add_argument("--mask_type", type=str, default="causal")
 group.add_argument("--d_obs_uni", type=int, default=64)
 group.add_argument("--n_acts_uni", type=int, default=10)

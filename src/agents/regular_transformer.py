@@ -132,8 +132,3 @@ class BCTransformer(nn.Module):
         return dict(act_pred=act_pred, obs_pred=obs_pred)
 
 
-def calc_entropy_stable(logits, axis=-1):
-    logits = jax.nn.log_softmax(logits, axis=axis)
-    probs = jnp.exp(logits)
-    logits = jnp.where(probs == 0, 0., logits)  # replace -inf with 0
-    return -(probs * logits).sum(axis=axis)
