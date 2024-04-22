@@ -267,6 +267,7 @@ def rollout_transformer(agent, agent_params, env_id, transform_params, prompt=No
         return out['act_pred'][:, prompt_len+T-1]
 
     stats = []
+    buffer = dict(obs=[], act=[], rew=[], done=[])
     
     obs_list, act_list = [], []
 
@@ -280,13 +281,26 @@ def rollout_transformer(agent, agent_params, env_id, transform_params, prompt=No
         act_list[-1] = act_pred
         
         act_original = data_utils.inverse_transform_act(act_pred, transform_params)
+
+        buffer['obs'].append(obs)
+        buffer['act'].append(act_original)
+
         obs, rew, term, trunc, infos = envs.step(act_original)
+
+        buffer['rew'].append(rew)
+        buffer['done'].append(term | trunc)
 
         if "final_info" in infos:
             for info in infos["final_info"]:
                 if info and "episode" in info:
                     stats.append((info["episode"]["r"], info["episode"]["l"]))
-    return np.array(stats)[:, 0]
+
+
+    for k in ['obs', 'act', 'rew', 'done']:
+        buffer[k] = np.stack(buffer[k], axis=1)
+    stats = np.array(stats).squeeze()
+    rets, lens = stats[:, 0], stats[:, 1]
+    return rets, lens, buffer
 
 
 if __name__ == '__main__':

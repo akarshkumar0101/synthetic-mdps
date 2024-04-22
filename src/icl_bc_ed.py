@@ -46,6 +46,7 @@ group.add_argument("--seg_diff_envs", type=lambda x: x=='True', default=False)
 group = parser.add_argument_group("optimization")
 group.add_argument("--n_iters_eval", type=int, default=100)
 group.add_argument("--n_iters", type=int, default=100000)
+group.add_argument("--k_iters_test", type=int, default=100)
 group.add_argument("--bs", type=int, default=64)
 # group.add_argument("--mini_bs", type=int, default=None)
 group.add_argument("--lr", type=float, default=3e-4)
@@ -193,16 +194,15 @@ def main(args):
             #                                                dataset_test, transform_params,
             #                                                num_envs=8, video_dir=None, seed=0, ctx_len=args.ctx_len,
             #                                                seq_len=args.seq_len)
-            num_envs = 1024
+            num_envs = 64
             batch = sample_batch_segments_from_dataset(rng, dataset_test, num_envs, args.n_segs-1, args.ctx_len//args.n_segs)
             batch = jax.tree_map(lambda x: rearrange(x, 'b s t ... -> b (s t) ...'), batch)
             vid_name = f"{args.save_dir}/videos/{i_iter}" if args.save_dir and args.video else None
-            rets = unroll_ed.rollout_transformer(agent, train_state.params, args.env_id, transform_params[0],
-                                                 prompt=(batch['obs'], batch['act']),
-                                                 num_envs=num_envs, num_steps=1000, vid_name=vid_name, seed=0)
+            rets, lens, buffer = unroll_ed.rollout_transformer(agent, train_state.params, args.env_id, transform_params[0],
+                                                               prompt=(batch['obs'], batch['act']),
+                                                               num_envs=num_envs, num_steps=1000, vid_name=vid_name, seed=0)
             print(f"Rollout results: {rets.mean():07.4f} +- {rets.std():07.4f}")
-            rollout_data.append(rets)
-            # rollout_data.append(dict(i_iter=i_iter, mse_act=mse_act, mse_obs=mse_obs, stats=stats))
+            rollout_data.append(dict(i_iter=i_iter, rets=rets, lens=lens, buffer=buffer, prompt=batch))
 
         if i_iter % 10 == 0:
             rng, batch = sample_test_batch(rng)
