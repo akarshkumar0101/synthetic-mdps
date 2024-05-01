@@ -94,11 +94,13 @@ def main(args):
         # print(rets_eval.shape)
         return dataset, rets_train, rets_eval
 
+    get_dataset_for_env_params_vmap = jax.jit(jax.vmap(get_dataset_for_env_params))
+
     rng = jax.random.PRNGKey(0)
     data = []
     for _ in tqdm(range(args.n_seeds_seq)):
         rng, _rng = split(rng)
-        dataset, rets_train, rets_eval = jax.jit(jax.vmap(get_dataset_for_env_params))(split(rng, args.n_seeds_par))
+        dataset, rets_train, rets_eval = get_dataset_for_env_params_vmap(split(rng, args.n_seeds_par))
         data.append((dataset, rets_train, rets_eval))
     data = util.tree_stack(data)
     data = jax.tree_map(lambda x: rearrange(x, "S1 S2 ... -> (S1 S2) ..."), data)

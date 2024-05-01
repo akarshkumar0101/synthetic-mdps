@@ -4,7 +4,7 @@ import os
 import numpy as np
 
 import experiment_utils
-import icl_bc_ed
+# import icl_bc_ed
 # import icl_gen
 # import unroll
 
@@ -33,6 +33,9 @@ Transfer tasks:
 "name=acrobot;fobs=T;rpo=64;tl=128"
 """
 
+dir_data = "~/synthetic-mdps-data/"
+dir_data = os.path.expanduser(dir_data)
+
 # def get_n_acts(env):
 #     config = dict([sub.split('=') for sub in env.split(';')])
 #     try:
@@ -54,6 +57,34 @@ for i in range(64):
     tl = np.random.choice([1, 4, 16, 64, 128, 256, 512], replace=True)
     env_id = f"name=dsmdp;i_d={i_d};i_s={i_s};t_a={t_a};t_s={t_s};o_d={o_d};tl={tl}"
     envs_dsmdp.append(env_id)
+envs_synthetic = envs_csmdp + envs_dsmdp
+
+np.random.seed(1)
+envs_csmdp = []
+env_args_default = dict(i_d=2,i_s=2,t_a=2,t_c=2,t_l=2,t_s=2,o_d=2,o_c=2,r_c=2,tl=64)
+for key in list(env_args_default.keys())[:-1]:
+    for i in range(5):
+        env_args = env_args_default.copy()
+        env_args[key] = i
+        env_id = "name=csmdp;" + ";".join([f"{k}={v}" for k, v in env_args.items()])
+        envs_csmdp.append(env_id)
+
+print(len(envs_csmdp))
+for env_id in envs_csmdp:
+    print(env_id)
+
+np.random.seed(1)
+envs_dsmdp = []
+env_args_default = dict(i_d=2,i_s=2,t_a=2,t_s=2,o_d=2,tl=64)
+for key in list(env_args_default.keys())[:-1]:
+    for i in range(5):
+        env_args = env_args_default.copy()
+        env_args[key] = i
+        env_id = "name=dsmdp;" + ";".join([f"{k}={v}" for k, v in env_args.items()])
+        envs_dsmdp.append(env_id)
+print(len(envs_dsmdp))
+for env_id in envs_dsmdp:
+    print(env_id)
 envs_synthetic = envs_csmdp + envs_dsmdp
 
 # np.random.seed(1)
@@ -96,6 +127,7 @@ envs_atari_16 = ["Pong", "Breakout", "SpaceInvaders", "Asterix", "Amidar", "Free
 
 envs_mujoco = ["Reacher", "Pusher", "InvertedPendulum", "InvertedDoublePendulum", "HalfCheetah", "Hopper", "Swimmer",
                "Walker2d", "Ant", "Humanoid", "HumanoidStandup"]
+envs_mujoco = ["Reacher", "InvertedPendulum", "InvertedDoublePendulum", "HalfCheetah", "Hopper", "Walker2d", "Ant"]
 
 envs_dm_control = ["acrobot-swingup", "acrobot-swingup_sparse", "ball_in_cup-catch", "cartpole-balance",
                    "cartpole-balance_sparse", "cartpole-swingup", "cartpole-swingup_sparse", "cartpole-two_poles",
@@ -123,39 +155,18 @@ domain2envs = {
 envs_test = envs_classic + envs_minatar
 # envs_test = envs_classic + envs_minatar + envs_atari_16 + envs_procgen
 
+# dir_data = "/vision-nfs/isola/env/akumar01/synthetic-mdps-data/"
 dataset_dirs = {}
 for env_id in envs_synthetic:
-    dataset_dirs[env_id] = f"/synthetic/{env_id}/"
+    dataset_dirs[env_id] = f"datasets/synthetic/{env_id}/"
 for env_id in envs_classic:
-    dataset_dirs[env_id] = f"/real/classic/{env_id}/"
+    dataset_dirs[env_id] = f"datasets/real/classic/{env_id}/"
 for env_id in envs_minatar:
-    dataset_dirs[env_id] = f"/real/minatar/{env_id}/"
+    dataset_dirs[env_id] = f"datasets/real/minatar/{env_id}/"
 for env_id in envs_procgen:
-    dataset_dirs[env_id] = f"/real/procgen/{env_id}/"
+    dataset_dirs[env_id] = f"datasets/real/procgen/{env_id}/"
 for env_id in envs_atari_57:
-    dataset_dirs[env_id] = f"/real/atari/{env_id}/"
-
-env_test2ft_steps = {
-    "name=CartPole-v1": 100,
-    "name=Acrobot-v1": 100,
-    "name=MountainCar-v0": 100,
-    "name=DiscretePendulum-v1": 100,
-    "name=Asterix-MinAtar": 2000,
-    "name=Breakout-MinAtar": 500,
-    "name=Freeway-MinAtar": 2000,
-    "name=SpaceInvaders-MinAtar": 500,
-}
-
-
-# def change_to_n_gpus(txt, n_gpus):
-#     lines = [line for line in txt.split("\n") if line]
-#     out = []
-#     for i, line in enumerate(lines):
-#         out.append(f'CUDA_VISIBLE_DEVICES={i % n_gpus} {line} &')
-#         if i % n_gpus == n_gpus - 1 or i == len(lines) - 1:
-#             out.append("wait")
-#     out = "\n".join(out) + "\n"
-#     return out
+    dataset_dirs[env_id] = f"datasets/real/atari/{env_id}/"
 
 
 def exp_train(dir_exp, obj='bc', domain='mujoco', use_augs=True, gato=False,
@@ -406,7 +417,7 @@ def exp_data_syn(dir_exp):
             n_iters_train=100,
             n_iters_eval=32,
             lr=3e-4,
-            save_dir=f"{dir_exp}/datasets/{dataset_dirs[env_id]}/",
+            save_dir=f"{dir_exp}/{dataset_dirs[env_id]}/",
         )
         cfgs.append(cfg)
     txt = experiment_utils.create_command_txt_from_configs(cfgs, cfg_default, python_command='python icl_gen_ed.py')
@@ -654,11 +665,63 @@ def collect_data_dm_control(dir_exp):
                                                            python_command='python cleanrl/collect_rpo_continuous_action.py')
     return txt
 
+def exp_train(domain='mujoco', gato=False, augs=False, **kwargs):
+    cfg_default = dict(seed=0, load_ckpt=None, save_dir=None, save_ckpt=True,
+                    dataset_paths=None, exclude_dataset_paths=None, n_augs=0, aug_dist="uniform", n_segs=4, nv=4096, nh=131072,
+                    n_iters=100000, bs=128, lr=3e-4, lr_schedule="constant", weight_decay=0.0, clip_grad_norm=1.0,
+                    d_obs_uni=32, d_act_uni=8, n_layers=4, n_heads=4, d_embd=256, ctx_len=128, mask_type="causal",
+                    env_id=None, n_envs=64, n_iters_rollout=1000, video=False)
+    cfg_default.update(kwargs)
+    cfgs = []
+    for env_id in domain2envs[domain]:
+        cfg = cfg_default.copy()
+        cfg.update(
+                save_dir=f"{dir_data}/icl_train/{env_id}{'_gato' if gato else '_oracle'}{'_aug' if augs else ''}",
+                dataset_paths=f"{dir_data}/datasets/{domain}/*/dataset.pkl" if gato else f"{dir_data}/datasets/{domain}/{env_id}/dataset.pkl",
+                exclude_dataset_paths=f"{dir_data}/datasets/{domain}/{env_id}/dataset.pkl" if gato else None,
+                n_augs=int(1e6) if augs else 0,
+        )
+        cfgs.append(cfg)
+    return experiment_utils.create_command_txt_from_configs(cfgs, python_command='python icl_train.py')
+
+def exp_test(domain='mujoco', gato=False, augs=False, domain_test='mujoco', **kwargs):
+    cfg_default = dict(seed=0, load_ckpt=None, save_dir=None, save_ckpt=False,
+                    dataset_paths=None, exclude_dataset_paths=None, n_augs=0, aug_dist="uniform", n_segs=4, nv=1, nh=256,
+                    n_iters=1000, bs=128, lr=3e-4, lr_schedule="constant", weight_decay=0.0, clip_grad_norm=1.0,
+                    d_obs_uni=32, d_act_uni=8, n_layers=4, n_heads=4, d_embd=256, ctx_len=128, mask_type="causal",
+                    env_id=None, n_envs=64, n_iters_rollout=1000, video=False)
+    cfg_default.update(kwargs)
+    cfgs = []
+    for env_id_test in domain2envs[domain_test]:
+        if domain=='scratch':
+            cfg = cfg_default.copy()
+            cfg.update(
+                    load_ckpt=None,
+                    save_dir=f"{dir_data}/icl_test/{env_id_test}/scratch",
+                    dataset_paths=f"{dir_data}/datasets/{domain_test}/{env_id_test}/dataset.pkl",
+                    env_id=env_id_test,
+            )
+            cfgs.append(cfg)
+        else:
+            for env_id in domain2envs[domain]:
+                if (domain==domain_test) and (env_id!=env_id_test):
+                    continue
+                cfg = cfg_default.copy()
+                cfg.update(
+                        load_ckpt=f"{dir_data}/icl_train/{env_id}{'_gato' if gato else '_oracle'}{'_aug' if augs else ''}/ckpt_latest.pkl",
+                        save_dir=f"{dir_data}/icl_test/{env_id_test}/{env_id}{'_gato' if gato else '_oracle'}{'_aug' if augs else ''}",
+                        dataset_paths=f"{dir_data}/datasets/{domain_test}/{env_id_test}/dataset.pkl",
+                        env_id=env_id_test,
+                )
+                cfgs.append(cfg)
+    return experiment_utils.create_command_txt_from_configs(cfgs, python_command='python icl_train.py')
+
 
 def main():
     os.system("rm -rf ./experiment/")
     os.makedirs("./experiment/", exist_ok=True)
-    dir_exp = "/data/vision/phillipi/akumar01/synthetic-mdps-data"
+    # dir_exp = "/data/vision/phillipi/akumar01/synthetic-mdps-data"
+    dir_exp = "/vision-nfs/isola/env/akumar01/synthetic-mdps-data"
 
     with open("./experiment/create_agent_atari.sh", "w") as f:
         f.write(create_agent_atari(dir_exp))
@@ -689,39 +752,41 @@ def main():
         f.write(exp_data_classic(dir_exp))
     with open("./experiment/data_minatar.sh", "w") as f:
         f.write(exp_data_minatar(dir_exp))
-    #
-    for obj in ["bc"]:
-        for domain in ["mujoco"]:
-            for use_augs in [False, True]:
-                for gato in [False, True]:
-                    n_iters = int(50e3)
-                    with open(f"./experiment/train_{obj}_{domain}_augs={use_augs}_gato={gato}.sh", "w") as f:
-                        txt = exp_train(dir_exp, obj=obj, domain=domain, use_augs=use_augs,
-                                        gato=gato, n_iters=n_iters, percent_data=0.25)
-                        f.write(txt)
 
-    for obj in ["bc"]:
-        for domain in ["csmdp", "dsmdp"]:
-            for use_augs in [False, True]:
-                for gato in [False]:
-                    n_iters = int(25e3)
-                    with open(f"./experiment/train_{obj}_{domain}_augs={use_augs}_gato={gato}.sh", "w") as f:
-                        txt = exp_train(dir_exp, obj=obj, domain=domain, use_augs=use_augs,
-                                        gato=gato, n_iters=n_iters, percent_data=1.0)
-                        f.write(txt)
+    for domain in ["mujoco"]:
+        for augs in [False, True]:
+            for gato in [False, True]:
+                txt = exp_train(domain=domain, gato=gato, augs=augs, n_iters=int(1e5) if augs else int(5e4))
+                with open(f"./experiment/train_{domain}_gato={gato}_augs={augs}.sh", "w") as f:
+                    f.write(txt)
+                txt = exp_test(domain=domain, gato=gato, augs=augs, domain_test='mujoco')
+                with open(f"./experiment/test_{'mujoco'}_{domain}_gato={gato}_augs={augs}.sh", "w") as f:
+                    f.write(txt)
+    for domain in ["csmdp", "dsmdp"]:
+        for augs in [False, True]:
+            for gato in [False]:
+                txt = exp_train(domain=domain, gato=gato, augs=augs, n_iters=int(1e5) if augs else int(5e4))
+                with open(f"./experiment/train_{domain}_gato={gato}_augs={augs}.sh", "w") as f:
+                    f.write(txt)
+                txt = exp_test(domain=domain, gato=gato, augs=augs, domain_test='mujoco')
+                with open(f"./experiment/test_{'mujoco'}_{domain}_gato={gato}_augs={augs}.sh", "w") as f:
+                    f.write(txt)
+    txt = exp_test(domain='scratch', gato=gato, augs=augs, domain_test='mujoco')
+    with open(f"./experiment/test_{'mujoco'}_{'scratch'}.sh", "w") as f:
+        f.write(txt)
 
-    with open("./experiment/test_bc_mujoco.sh", "w") as f:
-        f.write(exptest_mujoco(dir_exp, obj="bc"))
-    with open("./experiment/test_bc_csmdp.sh", "w") as f:
-        f.write(exptest_csmdpdsmdp(dir_exp, domain_test="csmdp"))
-    with open("./experiment/test_bc_dsmdp.sh", "w") as f:
-        f.write(exptest_csmdpdsmdp(dir_exp, domain_test="dsmdp"))
+    # with open("./experiment/test_bc_mujoco.sh", "w") as f:
+    #     f.write(exptest_mujoco(dir_exp, obj="bc"))
+    # with open("./experiment/test_bc_csmdp.sh", "w") as f:
+    #     f.write(exptest_csmdpdsmdp(dir_exp, domain_test="csmdp"))
+    # with open("./experiment/test_bc_dsmdp.sh", "w") as f:
+    #     f.write(exptest_csmdpdsmdp(dir_exp, domain_test="dsmdp"))
 
-    with open("./experiment/test_bc.sh", "w") as f:
-        f.write(exp_test(dir_exp, obj="bc"))
+    # with open("./experiment/test_bc.sh", "w") as f:
+    #     f.write(exp_test(dir_exp, obj="bc"))
 
-    with open("./experiment/mlp_bc.sh", "w") as f:
-        f.write(mlp_bc(dir_exp))
+    # with open("./experiment/mlp_bc.sh", "w") as f:
+    #     f.write(mlp_bc(dir_exp))
 
 
 if __name__ == "__main__":

@@ -113,11 +113,10 @@ def get_percent_dataset(dataset, percent_dataset_vert=1.0, percent_dataset_horz=
 
 
 def construct_dataset(include_paths, exclude_paths, d_obs_uni, d_acts_uni, nvh=None):
-    if isinstance(include_paths, str):
-        include_paths = [include_paths]
-    if isinstance(exclude_paths, str):
-        exclude_paths = [exclude_paths]
-
+    include_paths = [] if include_paths is None else include_paths
+    include_paths = [include_paths] if isinstance(include_paths, str) else include_paths
+    exclude_paths = [] if exclude_paths is None else exclude_paths
+    exclude_paths = [exclude_paths] if isinstance(exclude_paths, str) else exclude_paths
     include_paths = [os.path.abspath(p) for i in include_paths for p in glob.glob(i)]
     exclude_paths = [os.path.abspath(p) for i in exclude_paths for p in glob.glob(i)]
 

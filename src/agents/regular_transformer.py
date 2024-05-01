@@ -132,3 +132,64 @@ class BCTransformer(nn.Module):
         return dict(act_pred=act_pred, obs_pred=obs_pred)
 
 
+class TrajectoryTransformer(nn.Module):
+    d_obs: int
+    d_act: int
+    n_layers: int
+    n_heads: int
+    d_embd: int
+    ctx_len: int
+
+    mask_type: str = "causal"
+
+    def setup(self):
+        self.embed_done = nn.Dense(features=self.d_embd)
+        self.embed_rtg = nn.Dense(features=self.d_embd)
+        self.embed_obs = nn.Dense(features=self.d_embd)
+        self.embed_act = nn.Dense(features=self.d_embd)
+        self.embed_rew = nn.Dense(features=self.d_embd)
+
+        self.embed_pos = nn.Embed(num_embeddings=self.ctx_len, features=self.d_embd)
+
+        self.blocks = [Block(n_heads=self.n_heads, mask_type=self.mask_type) for _ in range(self.n_layers)]
+        self.ln = nn.LayerNorm()
+
+        self.predict_done = nn.Dense(features=1, kernel_init=nn.initializers.normal(1e-4))  # T, Da
+        self.predict_rtg = nn.Dense(features=1, kernel_init=nn.initializers.normal(1e-4))  # T, Da
+        self.predict_obs = nn.Dense(features=self.d_obs, kernel_init=nn.initializers.normal(1e-4))  # T, Da
+        self.predict_act = nn.Dense(features=self.d_act, kernel_init=nn.initializers.normal(1e-4))  # T, Da
+        self.predict_rew = nn.Dense(features=1, kernel_init=nn.initializers.normal(1e-4))  # T, Da
+
+    def __call__(self, done, rtg, obs, act, rew):  # done: (T, ), rtg: (T, ), obs: (T, Do),  act: (T, Da), rew: (T, )
+        assert obs.shape[0] <= self.ctx_len
+        T, _ = obs.shape
+
+        x = self.embed_pos(jnp.arange(T))  # (T, D)
+        x = x + self.embed_obs(obs)
+
+        if done is not None:
+            x_done = self.embed_done(done.astype(jnp.float32)[..., None])
+            x = x + x_done
+        if rtg is not None:
+            x_rtg = self.embed_rtg(rtg[..., None])
+            x = x + x_rtg
+        if act is not None:
+            x_act = self.embed_act(act)
+            x_act_prv = jnp.concatenate([jnp.zeros((1, self.d_embd)), x_act[:-1]], axis=0)
+            x = x + x_act_prv
+        if rew is not None:
+            x_rew = self.embed_rew(rew[..., None])
+            x_rew_prv = jnp.concatenate([jnp.zeros((1, self.d_embd)), x_rew[:-1]], axis=0)
+            x = x + x_rew_prv
+
+        for block in self.blocks:
+            x = block(x)
+        x = self.ln(x)
+
+        done_nxt_pred = self.predict_done(x)
+        rtg_nxt_pred = self.predict_rtg(x)
+        obs_nxt_pred = self.predict_obs(x)
+        act_pred = self.predict_act(x)
+        rew_pred = self.predict_rew(x)
+        return dict(done_nxt_pred=done_nxt_pred, rtg_nxt_pred=rtg_nxt_pred, obs_nxt_pred=obs_nxt_pred, act_pred=act_pred, rew_pred=rew_pred)
+

@@ -1,5 +1,6 @@
 import os
 import pickle
+import json
 
 import jax
 import jax.numpy as jnp
@@ -44,6 +45,11 @@ def tree_cat(trees):
     result_leaves = [jnp.concatenate(l) for l in grouped_leaves]
     return treedef_list[0].unflatten(result_leaves)
 
+def save_json(save_dir, name, item):
+    if save_dir is not None:
+        os.makedirs(f"{save_dir}/", exist_ok=True)
+        with open(f"{save_dir}/{name}.json", 'w') as f:
+            json.dump(item, f)
 
 def save_pkl(save_dir, name, item):
     if save_dir is not None:
