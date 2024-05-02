@@ -5,73 +5,79 @@ from .smdp import Discrete, Box
 
 
 class Init:
-    def __init__(self, n_states, std=0.):
-        self.n_states, self.std = n_states, std
+    def __init__(self, n, temperature=1.)
+        self.n, self.temperature = n, temperature
 
     def sample_params(self, rng):
-        logits = jax.random.normal(rng, (self.n_states,)) * self.std
-        params = dict(logits=logits)
-        return params
+        logits = jax.random.normal(rng, (self.n,))
+        return dict(logits=logits)
 
     def __call__(self, rng, params):
-        return jax.random.categorical(rng, params['logits'])
+        return jax.random.categorical(rng, params['logits'] / self.temperature, axis=-1)
 
-    def state_space(self, params):
-        return Discrete(self.n_states)
+    # def state_space(self, params):
+    #     return Discrete(self.n_states)
 
 
 class Transition:
-    def __init__(self, n_states, n_acts, std=0.):
-        self.n_states, self.n_acts = n_states, n_acts
-        self.std = std
+    def __init__(self, n, n_acts, temperature=1.):
+        self.n, self.n_acts, self.temperature = n, n_acts, temperature
 
     def sample_params(self, rng):
-        trans_matrix = self.std * jax.random.normal(rng, (self.n_acts, self.n_states, self.n_states))
-        params = dict(trans_matrix=trans_matrix)
-        return params
+        trans_matrix = jax.random.normal(rng, (self.n_acts, self.n, self.n))
+        return dict(trans_matrix=trans_matrix)
 
     def __call__(self, rng, state, action, params):
-        trans_matrix = params['trans_matrix']
-        logits = trans_matrix[action, :, state]
-        state_n = jax.random.categorical(rng, logits)
+        logits = params['trans_matrix'][action, state, :]
+        state_n = jax.random.categorical(rng, logits / self.temperature, axis=-1)
         return state_n
 
-    def action_space(self, params):
-        return Discrete(self.n_acts)
+    # def action_space(self, params):
+    #     return Discrete(self.n_acts)
 
 
 class Observation:
-    def __init__(self, n_states, d_obs, std=0.):
-        self.n_states, self.d_obs = n_states, d_obs
-        self.std = std
+    def __init__(self, n, d_obs, std=0.):
+        self.n, self.d_obs, self.std = n, d_obs, std
 
     def sample_params(self, rng):
-        obs_matrix = jax.random.normal(rng, (self.n_states, self.d_obs))
-        params = dict(obs_matrix=obs_matrix)
-        return params
+        obs_matrix = jax.random.normal(rng, (self.n, self.d_obs))
+        return dict(obs_matrix=obs_matrix)
 
     def __call__(self, rng, state, params):
-        mean = params['obs_matrix'][state]
-        noise = jax.random.normal(rng, (self.d_obs,))
-        obs = mean + noise * self.std
-        return obs
+        return params['obs_matrix'][state] + self.std * jax.random.normal(rng, (self.d_obs,))
 
-    def observation_space(self, params):
-        return Box(-3, 3, (self.d_obs,), dtype=jnp.float32)
+    # def observation_space(self, params):
+    #     return Box(-3, 3, (self.d_obs,), dtype=jnp.float32)
 
 
-class DenseReward:
-    def __init__(self, n_states, std=0.):
-        self.n_states = n_states
-        self.std = std
+class Reward:
+    def __init__(self, n, std=0., sparse=False, sparse_prob=0.1):
+        self.n, self.std = n, std
+        self.sparse, self.sparse_prob = sparse, sparse_prob
 
     def sample_params(self, rng):
-        rew_matrix = jax.random.normal(rng, (self.n_states, 1))
-        params = dict(rew_matrix=rew_matrix)
-        return params
+        rew_matrix = jax.random.normal(rng, (self.n, ))
+        return dict(rew_matrix=rew_matrix)
 
     def __call__(self, rng, state, params):
-        mean = params['rew_matrix'][state]
-        noise = jax.random.normal(rng, (1,))
-        rew = mean + noise * self.std
-        return rew[..., 0]
+        rew = params['rew_matrix'][state] + self.std * jax.random.normal(rng, ())
+        if self.sparse:
+            thresh = jax.scipy.stats.norm.ppf(self.sparse_prob)
+            return (rew<thresh).astype(jnp.float32)
+        else:
+            return rew
+
+class Done:
+    def __init__(self, n, std=0., sparse_prob=0.):
+        self.n, self.std = n, std
+        self.sparse_prob = sparse_prob
+
+    def sample_params(self, rng):
+        done_matrix = jax.random.normal(rng, (self.n, ))
+        return dict(done_matrix=done_matrix)
+
+    def __call__(self, rng, state, params):
+        done = params['done_matrix'][state] + self.std * jax.random.normal(rng, ())
+        thresh = jax.scipy.stats.norm.ppf(self.sparse_prob)
+        return done<thresh

@@ -3,6 +3,7 @@ import jax.numpy as jnp
 
 from .smdp import Discrete, Box
 
+from .random_net import RandomMLP, create_random_net_normal
 
 class Init:
     def __init__(self, m, n, temperature=1):
@@ -10,68 +11,83 @@ class Init:
         self.temperature = temperature
 
     def sample_params(self, rng):
-        logits = jax.random.normal(rng, (self.m, self.n)) / self.temperature
+        logits = jax.random.normal(rng, (self.m, self.n))
         return dict(logits=logits)
 
     def __call__(self, rng, params):
-        return jax.random.categorical(rng, params['logits'], axis=-1)
+        return jax.random.categorical(rng, params['logits']/self.temperature, axis=-1)
 
 
 class Transition:
-    def __init__(self, m, n, n_acts, temperature=0.):
-        self.m, self.n = m, n
-        self.n_acts = n_acts
-        self.temperature = temperature
+    def __init__(self, m, n, n_acts, temperature=1., n_layers=0, d_hidden=16, activation=jax.nn.gelu):
+        self.m, self.n, self.n_acts, self.temperature = m, n, n_acts, temperature
+        self.net = RandomMLP(n_layers=n_layers, d_hidden=d_hidden, d_out=self.m*self.n, activation=activation)
 
     def sample_params(self, rng):
-        rng, _rng = split(rng)
-        x = jax.random.normal(_rng, (32, self.m*self.n + self.n_acts))
-        rng, _rng = split(rng)
-        params = create_random_net(self.net, _rng, x)
-        return params
+        net_params = create_random_net_normal(rng, self.net, batch_size=16, d_in=self.m*self.n + self.n_acts)
+        return dict(net_params=net_params)
 
     def __call__(self, rng, state, action, params): 
         x1 = jax.nn.one_hot(state, self.n).flatten() # (m, n)
-        x2 = jax.nn.one_hot(action)
-        x = jnp.concatenate([x1, x2], axis=-1)
+        x2 = jax.nn.one_hot(action, self.n_acts)
+        x = jnp.concatenate([x1, x2], axis=-1)*2.-1.
 
-        logits = self.net.apply(params, x)
+        logits = self.net.apply(params['net_params'], x)
         logits = rearrange(logits, "(m n) -> m n", m=self.m)
         state_n = jax.random.categorical(rng, logits/self.temperature, axis=-1)
         return state_n
 
 class Observation:
-    def __init__(self, n_states, d_obs, std=0.):
-        self.n_states, self.d_obs = n_states, d_obs
+    def __init__(self, m, n, d_obs, std=0., n_layers=0, d_hidden=16, activation=jax.nn.gelu):
+        self.m, self.n, self.d_obs = m, n, d_obs
         self.std = std
 
-    def sample_params(self, rng):
-        obs_matrix = jax.random.normal(rng, (self.n_states, self.d_obs))
-        params = dict(obs_matrix=obs_matrix)
-        return params
-
-    def __call__(self, rng, state, params):
-        mean = params['obs_matrix'][state]
-        noise = jax.random.normal(rng, (self.d_obs,))
-        obs = mean + noise * self.std
-        return obs
-
-    def observation_space(self, params):
-        return Box(-3, 3, (self.d_obs,), dtype=jnp.float32)
-
-
-class DenseReward:
-    def __init__(self, n_states, std=0.):
-        self.n_states = n_states
-        self.std = std
+        self.net = RandomMLP(n_layers=n_layers, d_hidden=d_hidden, d_out=d_obs, activation=activation)
 
     def sample_params(self, rng):
-        rew_matrix = jax.random.normal(rng, (self.n_states, 1))
-        params = dict(rew_matrix=rew_matrix)
-        return params
+        net_params = create_random_net_normal(rng, self.net, batch_size=16, d_in=self.m*self.n)
+        return dict(net_params=net_params)
 
     def __call__(self, rng, state, params):
-        mean = params['rew_matrix'][state]
-        noise = jax.random.normal(rng, (1,))
-        rew = mean + noise * self.std
-        return rew[..., 0]
+        x1 = jax.nn.one_hot(state, self.n).flatten() # (m, n)
+        x = x1*2.-1.
+        return self.net.apply(params['net_params'], x) + self.std * jax.random.normal(rng, (self.d_obs,))
+
+class Reward:
+    def __init__(self, m, n, std=0., sparse=False, sparse_prob=0.1,
+                 n_layers=0, d_hidden=16, activation=jax.nn.gelu):
+        self.m, self.n, self.std = m, n, std
+        self.sparse, self.sparse_prob = sparse, sparse_prob
+        self.net = RandomMLP(n_layers=n_layers, d_hidden=d_hidden, d_out=1, activation=activation)
+
+    def sample_params(self, rng):
+        net_params = create_random_net_normal(rng, self.net, batch_size=16, d_in=self.m*self.n)
+        return dict(net_params=net_params)
+
+    def __call__(self, rng, state, params):
+        x1 = jax.nn.one_hot(state, self.n).flatten() # (m, n)
+        x = x1*2.-1.
+        rew = self.net.apply(params['net_params'], x) + self.std * jax.random.normal(rng, ())
+        if self.sparse:
+            thresh = jax.scipy.stats.norm.ppf(self.sparse_prob)
+            return (rew<thresh).astype(jnp.float32)
+        else:
+            return rew
+
+class Done:
+    def __init__(self, m, n, std=0., sparse_prob=0.,
+                 n_layers=0, d_hidden=16, activation=jax.nn.gelu):
+        self.n, self.std = n, std
+        self.sparse_prob = sparse_prob
+        self.net = RandomMLP(n_layers=n_layers, d_hidden=d_hidden, d_out=1, activation=activation)
+
+    def sample_params(self, rng):
+        net_params = create_random_net_normal(rng, self.net, batch_size=16, d_in=self.m*self.n)
+        return dict(net_params=net_params)
+
+    def __call__(self, rng, state, params):
+        x1 = jax.nn.one_hot(state, self.n).flatten() # (m, n)
+        x = x1*2.-1.
+        done = self.net.apply(params['net_params'], x) + self.std * jax.random.normal(rng, ())
+        thresh = jax.scipy.stats.norm.ppf(self.sparse_prob)
+        return done<thresh
