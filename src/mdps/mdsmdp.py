@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 
+from einops import rearrange
 from .smdp import Discrete, Box
 
 from .random_net import RandomMLP, create_random_net_normal
@@ -68,6 +69,7 @@ class Reward:
         x1 = jax.nn.one_hot(state, self.n).flatten() # (m, n)
         x = x1*2.-1.
         rew = self.net.apply(params['net_params'], x) + self.std * jax.random.normal(rng, ())
+        rew = rew[..., 0]
         if self.sparse:
             thresh = jax.scipy.stats.norm.ppf(self.sparse_prob)
             return (rew<thresh).astype(jnp.float32)
@@ -77,7 +79,7 @@ class Reward:
 class Done:
     def __init__(self, m, n, std=0., sparse_prob=0.,
                  n_layers=0, d_hidden=16, activation=jax.nn.gelu):
-        self.n, self.std = n, std
+        self.m, self.n, self.std = m, n, std
         self.sparse_prob = sparse_prob
         self.net = RandomMLP(n_layers=n_layers, d_hidden=d_hidden, d_out=1, activation=activation)
 
@@ -89,5 +91,6 @@ class Done:
         x1 = jax.nn.one_hot(state, self.n).flatten() # (m, n)
         x = x1*2.-1.
         done = self.net.apply(params['net_params'], x) + self.std * jax.random.normal(rng, ())
+        done = done[..., 0]
         thresh = jax.scipy.stats.norm.ppf(self.sparse_prob)
         return done<thresh

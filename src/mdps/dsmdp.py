@@ -5,7 +5,7 @@ from .smdp import Discrete, Box
 
 
 class Init:
-    def __init__(self, n, temperature=1.)
+    def __init__(self, n, temperature=1.):
         self.n, self.temperature = n, temperature
 
     def sample_params(self, rng):

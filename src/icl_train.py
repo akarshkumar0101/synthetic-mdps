@@ -81,6 +81,21 @@ def parse_args(*args, **kwargs):
     # assert args.bs % args.mini_bs == 0
     return args
 
+def preprocess_dataset(ds):
+    ds_prv = {f"{k}_prv": v[:, :-2] for k, v in ds.items()}
+    ds_now = {f"{k}": v[:, 1:-1] for k, v in ds.items()}
+    ds_nxt = {f"{k}_nxt": v[:, 2:] for k, v in ds.items()}
+    return {**ds_prv, **ds_now, **ds_nxt}
+
+def sample_batch_segments_from_dataset(_rng, dataset, batch_size, n_segs, seg_len):
+    _rng1, _rng2 = split(_rng)
+    n_e, n_t, *_ = dataset['obs'].shape
+    i_e = jax.random.randint(_rng1, (batch_size, 1, 1), minval=0, maxval=n_e)
+    i_t = jax.random.randint(_rng2, (batch_size, n_segs, 1), minval=0, maxval=n_t - seg_len)
+    i_t = i_t + jnp.arange(seg_len)
+    batch = jax.tree_map(lambda x: x[i_e, i_t, ...], dataset)
+    batch = jax.tree_map(lambda x: rearrange(x, 'b s t ... -> b (s t) ...'), batch)
+    return batch
 
 def main(args):
     print(args)
@@ -128,16 +143,6 @@ def main(args):
         raise NotImplementedError
     tx = optax.chain(optax.clip_by_global_norm(args.clip_grad_norm), optax.adamw(lr_schedule, weight_decay=args.weight_decay, eps=1e-8))
     train_state = TrainState.create(apply_fn=agent.apply, params=agent_params, tx=tx)
-
-    def sample_batch_segments_from_dataset(_rng, dataset, batch_size, n_segs, seg_len):
-        _rng1, _rng2 = split(_rng)
-        n_e, n_t, *_ = dataset['obs'].shape
-        i_e = jax.random.randint(_rng1, (batch_size, 1, 1), minval=0, maxval=n_e)
-        i_t = jax.random.randint(_rng2, (batch_size, n_segs, 1), minval=0, maxval=n_t - seg_len)
-        i_t = i_t + jnp.arange(seg_len)
-        batch = jax.tree_map(lambda x: x[i_e, i_t, ...], dataset)
-        batch = jax.tree_map(lambda x: rearrange(x, 'b s t ... -> b (s t) ...'), batch)
-        return batch
 
     def sample_test_batch(_rng):
         _rng1, _rng2 = split(_rng)

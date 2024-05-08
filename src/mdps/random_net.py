@@ -3,6 +3,7 @@ from typing import Callable
 import flax.linen as nn
 import jax.numpy as jnp
 from jax.random import split
+import jax
 
 
 class RandomMLP(nn.Module):

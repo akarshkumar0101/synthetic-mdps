@@ -3,7 +3,7 @@ import jax.random
 from einops import rearrange
 from jax.random import split
 
-from .random_net import RandomMLP, create_random_net
+from .random_net import RandomMLP, create_random_net_normal
 from .smdp import Discrete, Box
 
 
@@ -89,6 +89,7 @@ class Reward:
 
     def __call__(self, rng, state, params):
         rew = self.net.apply(params['net_params'], state) + self.std * jax.random.normal(rng, ())
+        rew = rew[..., 0]
         if self.sparse:
             thresh = jax.scipy.stats.norm.ppf(self.sparse_prob)
             return (rew<thresh).astype(jnp.float32)
@@ -108,6 +109,7 @@ class Done:
 
     def __call__(self, rng, state, params):
         done = self.net.apply(params['net_params'], state) + self.std * jax.random.normal(rng, ())
+        done = done[..., 0]
         thresh = jax.scipy.stats.norm.ppf(self.sparse_prob)
         return done<thresh
 
