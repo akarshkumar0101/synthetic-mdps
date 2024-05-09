@@ -13,10 +13,10 @@ class Init:
 
     def sample_params(self, rng):
         logits = jax.random.normal(rng, (self.m, self.n))
-        return dict(logits=logits)
+        return {"init/logits": logits}
 
     def __call__(self, rng, params):
-        return jax.random.categorical(rng, params['logits']/self.temperature, axis=-1)
+        return jax.random.categorical(rng, params['init/logits']/self.temperature, axis=-1)
 
 
 class Transition:
@@ -26,14 +26,14 @@ class Transition:
 
     def sample_params(self, rng):
         net_params = create_random_net_normal(rng, self.net, batch_size=16, d_in=self.m*self.n + self.n_acts)
-        return dict(net_params=net_params)
+        return {"trans/net_params": net_params}
 
     def __call__(self, rng, state, action, params): 
         x1 = jax.nn.one_hot(state, self.n).flatten() # (m, n)
         x2 = jax.nn.one_hot(action, self.n_acts)
         x = jnp.concatenate([x1, x2], axis=-1)*2.-1.
 
-        logits = self.net.apply(params['net_params'], x)
+        logits = self.net.apply(params['trans/net_params'], x)
         logits = rearrange(logits, "(m n) -> m n", m=self.m)
         state_n = jax.random.categorical(rng, logits/self.temperature, axis=-1)
         return state_n
@@ -47,12 +47,12 @@ class Observation:
 
     def sample_params(self, rng):
         net_params = create_random_net_normal(rng, self.net, batch_size=16, d_in=self.m*self.n)
-        return dict(net_params=net_params)
+        return {"obs/net_params": net_params}
 
     def __call__(self, rng, state, params):
         x1 = jax.nn.one_hot(state, self.n).flatten() # (m, n)
         x = x1*2.-1.
-        return self.net.apply(params['net_params'], x) + self.std * jax.random.normal(rng, (self.d_obs,))
+        return self.net.apply(params['obs/net_params'], x) + self.std * jax.random.normal(rng, (self.d_obs,))
 
 class Reward:
     def __init__(self, m, n, std=0., sparse=False, sparse_prob=0.1,
@@ -63,12 +63,12 @@ class Reward:
 
     def sample_params(self, rng):
         net_params = create_random_net_normal(rng, self.net, batch_size=16, d_in=self.m*self.n)
-        return dict(net_params=net_params)
+        return {"rew/net_params": net_params}
 
     def __call__(self, rng, state, params):
         x1 = jax.nn.one_hot(state, self.n).flatten() # (m, n)
         x = x1*2.-1.
-        rew = self.net.apply(params['net_params'], x) + self.std * jax.random.normal(rng, ())
+        rew = self.net.apply(params['rew/net_params'], x) + self.std * jax.random.normal(rng, ())
         rew = rew[..., 0]
         if self.sparse:
             thresh = jax.scipy.stats.norm.ppf(self.sparse_prob)
@@ -85,12 +85,12 @@ class Done:
 
     def sample_params(self, rng):
         net_params = create_random_net_normal(rng, self.net, batch_size=16, d_in=self.m*self.n)
-        return dict(net_params=net_params)
+        return {"done/net_params": net_params}
 
     def __call__(self, rng, state, params):
         x1 = jax.nn.one_hot(state, self.n).flatten() # (m, n)
         x = x1*2.-1.
-        done = self.net.apply(params['net_params'], x) + self.std * jax.random.normal(rng, ())
+        done = self.net.apply(params['done/net_params'], x) + self.std * jax.random.normal(rng, ())
         done = done[..., 0]
         thresh = jax.scipy.stats.norm.ppf(self.sparse_prob)
         return done<thresh

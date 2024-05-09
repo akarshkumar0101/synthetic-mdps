@@ -7,33 +7,43 @@ from .random_net import RandomMLP, create_random_net_normal
 from .smdp import Discrete, Box
 
 
-def constrain_state(state, constraint='clip'):
+def constrain_state(state, constraint='clip', embeddings=None):
     if constraint == 'clip':
         return state.clip(min=-3., max=3.)
-    elif constraint == 'norm':
-        # d_state = state.shape[-1]
-        # max_norm = 2. + jnp.sqrt(d_state)
-        # norm = jnp.linalg.norm(state, axis=-1, keepdims=True)
-        # clip_norm = norm.clip(min=None, max=max_norm)
-        # state = state / norm * clip_norm
-        # return state
-        return state / jnp.linalg.norm(state, axis=-1, keepdims=True)
+    elif constraint == 'ball': # not used
+        d_state = state.shape[-1]
+        max_norm = 2. + jnp.sqrt(d_state)
+        norm = jnp.linalg.norm(state, axis=-1, keepdims=True)
+        clip_norm = norm.clip(min=None, max=max_norm)
+        state = state / norm * clip_norm
+        return state
+    elif constraint == 'unit_norm':
+        d_state = state.shape[-1]
+        return state / jnp.linalg.norm(state, axis=-1, keepdims=True) * jnp.sqrt(d_state)
+    elif constraint == "embeddings":
+        # return the closest embedding
+        # state: d, embeddings: n, d
+        idx = jnp.argmin(jnp.linalg.norm(embeddings-state, axis=-1))
+        return embeddings[idx]
     else:
         raise NotImplementedError
 
-
 class Init:
-    def __init__(self, d_state, std=0., constraint='clip'):
+    def __init__(self, d_state, std=0., constraint='clip', n_embeds=None):
         self.d_state, self.std = d_state, std
         self.constraint = constraint
+        self.n_embeds = n_embeds
 
     def sample_params(self, rng):
         mean = jax.random.normal(rng, (self.d_state,))
-        return dict(mean=mean)
+        params = {"init/mean": mean, "init/embeddings": None}
+        if self.constraint == "embeddings":
+            params["init/embeddings"] = jax.random.normal(rng, (self.n_embeds, self.d_state))
+        return params
 
     def __call__(self, rng, params):
-        state = params['mean'] + self.std * jax.random.normal(rng, (self.d_state,))
-        return constrain_state(state, self.constraint)
+        state = params['init/mean'] + self.std * jax.random.normal(rng, (self.d_state,))
+        return constrain_state(state, self.constraint, params['init/embeddings'])
 
     # def state_space(self, params):
     #     return Box(-3, 3, (self.d_state,), dtype=jnp.float32)
@@ -47,17 +57,14 @@ class Transition:
 
     def sample_params(self, rng):
         net_params = create_random_net_normal(rng, self.net, batch_size=16, d_in=self.d_state)
-        return dict(net_params=net_params)
+        return {"trans/net_params": net_params}
 
     def __call__(self, rng, state, action, params):
-        x =  self.net.apply(params['net_params'], state)
+        x =  self.net.apply(params['trans/net_params'], state)
         x = rearrange(x, "(a d) -> a d", a=self.n_acts)[action]
         x = x + self.std * jax.random.normal(rng, (self.d_state,))
         state = state + self.locality * x
-        return constrain_state(state, self.constraint)
-
-    # def action_space(self, params):
-    #     return Discrete(self.n_acts)
+        return constrain_state(state, self.constraint, params['init/embeddings'])
 
 
 class Observation:
@@ -67,10 +74,10 @@ class Observation:
 
     def sample_params(self, rng):
         net_params = create_random_net_normal(rng, self.net, batch_size=16, d_in=self.d_state)
-        return dict(net_params=net_params)
+        return {"obs/net_params": net_params}
 
     def __call__(self, rng, state, params):
-        return self.net.apply(params['net_params'], state) + self.std * jax.random.normal(rng, (self.d_obs,))
+        return self.net.apply(params['obs/net_params'], state) + self.std * jax.random.normal(rng, (self.d_obs,))
 
     # def observation_space(self, params):
     #     return Box(-3, 3, (self.d_obs,), dtype=jnp.float32)
@@ -85,10 +92,10 @@ class Reward:
 
     def sample_params(self, rng):
         net_params = create_random_net_normal(rng, self.net, batch_size=16, d_in=self.d_state)
-        return dict(net_params=net_params)
+        return {"rew/net_params": net_params}
 
     def __call__(self, rng, state, params):
-        rew = self.net.apply(params['net_params'], state) + self.std * jax.random.normal(rng, ())
+        rew = self.net.apply(params['rew/net_params'], state) + self.std * jax.random.normal(rng, ())
         rew = rew[..., 0]
         if self.sparse:
             thresh = jax.scipy.stats.norm.ppf(self.sparse_prob)
@@ -105,10 +112,10 @@ class Done:
 
     def sample_params(self, rng):
         net_params = create_random_net_normal(rng, self.net, batch_size=16, d_in=self.d_state)
-        return dict(net_params=net_params)
+        return {"done/net_params": net_params}
 
     def __call__(self, rng, state, params):
-        done = self.net.apply(params['net_params'], state) + self.std * jax.random.normal(rng, ())
+        done = self.net.apply(params['done/net_params'], state) + self.std * jax.random.normal(rng, ())
         done = done[..., 0]
         thresh = jax.scipy.stats.norm.ppf(self.sparse_prob)
         return done<thresh

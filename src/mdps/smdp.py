@@ -19,30 +19,30 @@ class SyntheticMDP(environment.Environment):
         obs = self.model_obs.sample_params(_rng_obs)
         rew = self.model_rew.sample_params(_rng_rew)
         done = self.model_done.sample_params(_rng_done)
-        return dict(init=init, trans=trans, obs=obs, rew=rew, done=done)
+        return {**init, **trans, **obs, **rew, **done}
 
     def reset_env(self, rng, params):
         """Performs resetting of environment."""
         _rng_init, _rng_obs = split(rng)
-        state = self.model_init(_rng_init, params['init'])
-        obs = self.model_obs(_rng_obs, state, params['obs'])
+        state = self.model_init(_rng_init, params)
+        obs = self.model_obs(_rng_obs, state, params)
         return obs, state
 
     def step_env(self, rng, state, action, params):
         """Performs step transitions in the environment."""
         _rng_trans, _rng_obs, _rng_rew, _rng_done = jax.random.split(rng, 4)
-        state = self.model_trans(_rng_trans, state, action, params['trans'])
-        obs = self.model_obs(_rng_obs, state, params['obs'])
-        rew = self.model_rew(_rng_rew, state, params['rew'])
-        done = self.model_done(_rng_done, state, params['done'])
+        state = self.model_trans(_rng_trans, state, action, params)
+        obs = self.model_obs(_rng_obs, state, params)
+        rew = self.model_rew(_rng_rew, state, params)
+        done = self.model_done(_rng_done, state, params)
         info = {}
         return obs, state, rew, done, info
 
     def get_rew(self, rng, state, params):
-        return self.model_rew(rng, state, params['rew'])
+        return self.model_rew(rng, state, params)
 
     def is_done(self, rng, state, params):
-        return self.model_done(rng, state, params['done'])
+        return self.model_done(rng, state, params)
 
     @property
     def name(self) -> str:
@@ -79,7 +79,7 @@ class IdentityObs:
 
 class NeverDone:
     def sample_params(self, rng):
-        return None
+        return {"done": None}
 
     def __call__(self, rng, state, params):
         return False
