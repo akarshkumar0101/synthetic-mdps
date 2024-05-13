@@ -54,7 +54,7 @@ family2axes = {
     "hsmdp":  ["sd", "ad", "od", "isv", "tc", "tloc", "ts", "oc", "os", "rc", "rs", "rspr", "rsprp", "dc", "ds", "dsprp", "tl"],
 }
 
-def create_smdp(env_id):
+def create_smdp(env_id, log_wrapper=False):
     env_cfg = dict([sub.split('=') for sub in env_id.split(';')])
 
     if env_cfg['name'] == 'mchain':
@@ -73,7 +73,7 @@ def create_smdp(env_id):
         # rsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['rsprp'])]
         # dc = [0, 1, 2, 4, 8][int(env_cfg['dc'])]
         ds = [0, 0.03, 0.1, 0.3, 1.0][int(env_cfg['ds'])]
-        dsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['dsprp'])]
+        dsprp = [0.0, 0.01, 0.03, 0.1, 0.3][int(env_cfg['dsprp'])]
         tl = [1, 4, 16, 64, 128][int(env_cfg['tl'])]
         model_init = dsmdp.Init(n=sd, temperature=isv)
         model_trans = dsmdp.Transition(n=sd, n_acts=1, temperature=ts)
@@ -98,7 +98,7 @@ def create_smdp(env_id):
         rsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['rsprp'])]
         # dc = [0, 1, 2, 4, 8][int(env_cfg['dc'])]
         # ds = [0, 0.03, 0.1, 0.3, 1.0][int(env_cfg['ds'])]
-        # dsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['dsprp'])]
+        # dsprp = [0.0, 0.01, 0.03, 0.1, 0.3][int(env_cfg['dsprp'])]
         # tl = [1, 4, 16, 64, 128][int(env_cfg['tl'])]
         model_init = dsmdp.Init(n=sd, temperature=isv)
         model_trans = dsmdp.Transition(n=sd, n_acts=ad, temperature=ts)
@@ -123,7 +123,7 @@ def create_smdp(env_id):
         rsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['rsprp'])]
         # dc = [0, 1, 2, 4, 8][int(env_cfg['dc'])]
         ds = [0, 0.03, 0.1, 0.3, 1.0][int(env_cfg['ds'])]
-        dsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['dsprp'])]
+        dsprp = [0.0, 0.01, 0.03, 0.1, 0.3][int(env_cfg['dsprp'])]
         tl = [1, 4, 16, 64, 128][int(env_cfg['tl'])]
         model_init = dsmdp.Init(n=sd, temperature=isv)
         model_trans = dsmdp.Transition(n=sd, n_acts=ad, temperature=ts)
@@ -148,7 +148,7 @@ def create_smdp(env_id):
         rsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['rsprp'])]
         dc = [0, 1, 2, 4, 8][int(env_cfg['dc'])]
         ds = [0, 0.03, 0.1, 0.3, 1.0][int(env_cfg['ds'])]
-        dsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['dsprp'])]
+        dsprp = [0.0, 0.01, 0.03, 0.1, 0.3][int(env_cfg['dsprp'])]
         tl = [1, 4, 16, 64, 128][int(env_cfg['tl'])]
         model_init = mdsmdp.Init(m=sd, n=sd, temperature=isv)
         model_trans = mdsmdp.Transition(m=sd, n=sd, n_acts=ad, temperature=ts, n_layers=tc, d_hidden=16, activation=jax.nn.gelu)
@@ -173,7 +173,7 @@ def create_smdp(env_id):
         rsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['rsprp'])]
         dc = [0, 1, 2, 4, 8][int(env_cfg['dc'])]
         ds = [0, 0.03, 0.1, 0.3, 1.0][int(env_cfg['ds'])]
-        dsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['dsprp'])]
+        dsprp = [0.0, 0.01, 0.03, 0.1, 0.3][int(env_cfg['dsprp'])]
         tl = [1, 4, 16, 64, 128][int(env_cfg['tl'])]
         model_init = csmdp.Init(d_state=sd, std=isv, constraint="clip", n_embeds=None)
         model_trans = csmdp.Transition(d_state=sd, n_acts=ad, std=ts, locality=tloc, constraint='clip', n_layers=tc, d_hidden=16, activation=jax.nn.gelu)
@@ -198,7 +198,7 @@ def create_smdp(env_id):
         rsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['rsprp'])]
         dc = [0, 1, 2, 4, 8][int(env_cfg['dc'])]
         ds = [0, 0.03, 0.1, 0.3, 1.0][int(env_cfg['ds'])]
-        dsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['dsprp'])]
+        dsprp = [0.0, 0.01, 0.03, 0.1, 0.3][int(env_cfg['dsprp'])]
         tl = [1, 4, 16, 64, 128][int(env_cfg['tl'])]
         model_init = csmdp.Init(d_state=sd, std=isv, constraint="unit_norm", n_embeds=None)
         model_trans = csmdp.Transition(d_state=sd, n_acts=ad, std=ts, locality=tloc, constraint='unit_norm', n_layers=tc, d_hidden=16, activation=jax.nn.gelu)
@@ -224,7 +224,7 @@ def create_smdp(env_id):
         rsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['rsprp'])]
         dc = [0, 1, 2, 4, 8][int(env_cfg['dc'])]
         ds = [0, 0.03, 0.1, 0.3, 1.0][int(env_cfg['ds'])]
-        dsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['dsprp'])]
+        dsprp = [0.0, 0.01, 0.03, 0.1, 0.3][int(env_cfg['dsprp'])]
         tl = [1, 4, 16, 64, 128][int(env_cfg['tl'])]
         model_init = csmdp.Init(d_state=sd, std=isv, constraint="embeddings", n_embeds=sde)
         model_trans = csmdp.Transition(d_state=sd, n_acts=ad, std=ts, locality=tloc, constraint='embeddings', n_layers=tc, d_hidden=16, activation=jax.nn.gelu)
@@ -252,7 +252,7 @@ def create_smdp(env_id):
         rsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['rsprp'])]
         dc = [0, 1, 2, 4, 8][int(env_cfg['dc'])]
         ds = [0, 0.03, 0.1, 0.3, 1.0][int(env_cfg['ds'])]
-        dsprp = [0.01, 0.03, 0.1, 0.3, 0.9][int(env_cfg['dsprp'])]
+        dsprp = [0.0, 0.01, 0.03, 0.1, 0.3][int(env_cfg['dsprp'])]
         tl = [1, 4, 16, 64, 128][int(env_cfg['tl'])]
         model_init = hsmdp.Init(m=sd1, n=sd1, d_state=sd2, temperature=isv1, std=isv2, constraint="clip", n_embeds=None)
         model_trans = hsmdp.Transition(m=sd1, n=sd1, d_state=sd2, n_acts=ad, temperature=ts1, std=ts2, locality=tloc, constraint='clip', n_layers=tc, d_hidden=16, activation=jax.nn.gelu)
@@ -263,7 +263,8 @@ def create_smdp(env_id):
         env = TimeLimit(env, n_steps_max=tl)
     else:
         raise NotImplementedError
-    env = LogWrapper(env)
+    if log_wrapper:
+        env = LogWrapper(env)
     return env
 
 

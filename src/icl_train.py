@@ -70,6 +70,17 @@ group.add_argument("--n_envs", type=int, default=64)
 group.add_argument("--n_iters_rollout", type=int, default=1000)
 group.add_argument("--video", type=lambda x: x=='True', default=False)
 
+"""
+Dataset format:
+    N is number of unique environments
+    T is number of timesteps
+
+    done: (N, T)
+    obs:  (N, T, Do)
+    act:  (N, T, Da)
+    rew:  (N, T)
+"""
+
 
 def parse_args(*args, **kwargs):
     args = parser.parse_args(*args, **kwargs)
@@ -89,13 +100,38 @@ def preprocess_dataset(ds):
 
 def sample_batch_segments_from_dataset(_rng, dataset, batch_size, n_segs, seg_len):
     _rng1, _rng2 = split(_rng)
-    n_e, n_t, *_ = dataset['obs'].shape
-    i_e = jax.random.randint(_rng1, (batch_size, 1, 1), minval=0, maxval=n_e)
-    i_t = jax.random.randint(_rng2, (batch_size, n_segs, 1), minval=0, maxval=n_t - seg_len)
-    i_t = i_t + jnp.arange(seg_len)
-    batch = jax.tree_map(lambda x: x[i_e, i_t, ...], dataset)
-    batch = jax.tree_map(lambda x: rearrange(x, 'b s t ... -> b (s t) ...'), batch)
+    N, T, *_ = dataset['obs'].shape
+    n = jax.random.randint(_rng1, (batch_size, 1, 1), minval=0, maxval=N)
+    t = jax.random.randint(_rng2, (batch_size, n_segs, 1), minval=1, maxval=T-seg_len-1)
+    t = t + jnp.arange(seg_len)
+
+    batch = jax.tree_map(lambda x: x[n, t, ...], dataset)
+    batch_prv = jax.tree_map(lambda x: x[n, t-1, ...], dataset)
+    batch_prv = {f"{k}_prv": v for k, v in batch_prv.items()}
+    batch_nxt = jax.tree_map(lambda x: x[n, t+1, ...], dataset)
+    batch_nxt = {f"{k}_nxt": v for k, v in batch_nxt.items()}
+    batch = {**batch, **batch_prv, **batch_nxt}
+    batch = jax.tree_map(lambda x: rearrange(x, 'B S T ... -> B (S T) ...'), batch)
     return batch
+
+def get_inputs_outputs_iid_transformer(batch):
+    B, T, Da = batch['act'].shape
+    obs_inp, act_out = batch['obs'], batch['act']
+    act_inp = jnp.concatenate([jnp.zeros((B, 1, Da)), act_out[:, :-1, :]], axis=1)
+    obs_out = batch['obs_nxt']
+    inputs, outputs = dict(obs=obs_inp, act=act_inp), dict(obs=obs_out, act=act_out)
+    return inputs, outputs
+
+
+# def sample_batch_segments_from_dataset(_rng, dataset, batch_size, n_segs, seg_len):
+#     _rng1, _rng2 = split(_rng)
+#     n_e, n_t, *_ = dataset['obs'].shape
+#     i_e = jax.random.randint(_rng1, (batch_size, 1, 1), minval=0, maxval=n_e)
+#     i_t = jax.random.randint(_rng2, (batch_size, n_segs, 1), minval=0, maxval=n_t - seg_len)
+#     i_t = i_t + jnp.arange(seg_len)
+#     batch = jax.tree_map(lambda x: x[i_e, i_t, ...], dataset)
+#     batch = jax.tree_map(lambda x: rearrange(x, 'b s t ... -> b (s t) ...'), batch)
+#     return batch
 
 def main(args):
     print(args)
