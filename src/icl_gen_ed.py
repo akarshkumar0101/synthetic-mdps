@@ -11,7 +11,8 @@ from einops import rearrange
 from jax.random import split
 from tqdm.auto import tqdm
 
-import create_env
+# import create_env
+from mdps import create_smdp
 import util
 from agents import DenseObsEmbed
 from agents.basic import BigBasicAgentSeparate, BasicAgentSeparate
@@ -49,8 +50,10 @@ def parse_args(*args, **kwargs):
 
 def main(args):
     print(args)
-    env = create_env.create_env(args.env_id)
-    n_acts = env.action_space(None).n
+    # env = create_env.create_env(args.env_id)
+    env = create_smdp.create_smdp(args.env_id, log_wrapper=True)
+    # n_acts = env.action_space(None).n
+    n_acts = env.model_trans.n_acts
 
     if args.agent_id == 'small':
         ObsEmbed = partial(DenseObsEmbed, d_embd=32)
@@ -83,14 +86,14 @@ def main(args):
         idx_best_expert = rets_train[-1].argmax()
         rets_train = rets_train[:, idx_best_expert]
         # print(rets.shape, idx_best_expert)
-        carry = jax.tree_map(lambda x: x[idx_best_expert], carry)
+        carry = jax.tree.map(lambda x: x[idx_best_expert], carry)
 
         carry, buffer = jax.lax.scan(ppo.eval_step, carry, xs=None, length=args.n_iters_eval)
         rets_eval = buffer['info']['returned_episode_returns'].mean()
         dataset = {k: buffer[k] for k in ['obs', 'logits', 'act', 'done', 'rew']}
-        # print(jax.tree_map(lambda x: x.shape, dataset))
-        dataset = jax.tree_map(lambda x: rearrange(x, 'N T E ... -> E (N T) ...'), dataset)
-        # print(jax.tree_map(lambda x: x.shape, dataset))
+        # print(jax.tree.map(lambda x: x.shape, dataset))
+        dataset = jax.tree.map(lambda x: rearrange(x, 'N T E ... -> (E N T) ...'), dataset)
+        # print(jax.tree.map(lambda x: x.shape, dataset))
         # print(rets_eval.shape)
         return dataset, rets_train, rets_eval
 
@@ -103,11 +106,10 @@ def main(args):
         dataset, rets_train, rets_eval = get_dataset_for_env_params_vmap(split(rng, args.n_seeds_par))
         data.append((dataset, rets_train, rets_eval))
     data = util.tree_stack(data)
-    data = jax.tree_map(lambda x: rearrange(x, "S1 S2 ... -> (S1 S2) ..."), data)
-    dataset, rets_train, rets_eval = data  # (S E T ...), (S N), (S )
-    # print(jax.tree_map(lambda x: x.shape, (dataset, rets_train, rets_eval)))
-    dataset = jax.tree_map(lambda x: rearrange(x, 'S E T ... -> (S E) T ...'), dataset)
-    print("Dataset shape: ", jax.tree_map(lambda x: x.shape, (dataset, rets_train, rets_eval)))
+    data = jax.tree.map(lambda x: rearrange(x, "S1 S2 ... -> (S1 S2) ..."), data)
+    dataset, rets_train, rets_eval = data  # (S T ...)
+    # print(jax.tree.map(lambda x: x.shape, (dataset, rets_train, rets_eval)))
+    print("Dataset shape: ", jax.tree.map(lambda x: x.shape, (dataset, rets_train, rets_eval)))
 
     if args.save_dir is not None:
         os.makedirs(args.save_dir, exist_ok=True)
@@ -130,7 +132,7 @@ def main(args):
         plt.tight_layout()
         plt.savefig(f'{args.save_dir}/training_curve.png', dpi=300)
 
-        dataset = jax.tree_map(lambda x: np.array(x), dataset)
+        dataset = jax.tree.map(lambda x: np.array(x), dataset)
         rets_train = np.array(rets_train)
         rets_eval = np.array(rets_eval)
         with open(f'{args.save_dir}/dataset.pkl', 'wb') as f:
@@ -140,11 +142,11 @@ def main(args):
         with open(f'{args.save_dir}/rets_eval.pkl', 'wb') as f:
             pickle.dump(rets_eval, f)
 
-        try:
-            fig = create_env.plot_env_id_multi(args.env_id)
-            fig.savefig(f"{args.save_dir}/{args.env_id}.png", dpi='figure')
-        except NotImplementedError:
-            print(f"Cannot visualize {args.env_id} because it is not implemented")
+        # try:
+        #     fig = create_env.plot_env_id_multi(args.env_id)
+        #     fig.savefig(f"{args.save_dir}/{args.env_id}.png", dpi='figure')
+        # except NotImplementedError:
+        #     print(f"Cannot visualize {args.env_id} because it is not implemented")
         plt.close()
 
 

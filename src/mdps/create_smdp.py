@@ -1,5 +1,5 @@
-import flax.linen as nn
-import gymnax
+# import flax.linen as nn
+# import gymnax
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -280,15 +280,15 @@ def temp():
         t_l = [1e-2, 3e-2, 1e-1, 3e-1, 1e0][int(env_cfg['t_l'])]
         t_s = [0, 3e-2, 1e-1, 3e-1, 1e0][int(env_cfg['t_s'])]
         model_trans = csmdp.DeltaTransition(d_state=i_d, n_acts=t_a,
-                                            n_layers=t_c, d_hidden=16, activation=nn.relu,
+                                            n_layers=t_c, d_hidden=16, activation=jax.nn.relu,
                                             locality=t_l, std=t_s)
 
         o_d = [2, 4, 8, 16, 32][int(env_cfg['o_d'])]
         o_c = [0, 1, 2, 4, 8][int(env_cfg['o_c'])]
-        model_obs = csmdp.Observation(d_state=i_d, d_obs=o_d, n_layers=o_c, d_hidden=16, activation=nn.relu, std=0.)
+        model_obs = csmdp.Observation(d_state=i_d, d_obs=o_d, n_layers=o_c, d_hidden=16, activation=jax.nn.relu, std=0.)
 
         r_c = [0, 1, 2, 4, 8][int(env_cfg['r_c'])]
-        model_rew = csmdp.DenseReward(d_state=i_d, n_layers=r_c, d_hidden=16, activation=nn.relu, std=0.)
+        model_rew = csmdp.DenseReward(d_state=i_d, n_layers=r_c, d_hidden=16, activation=jax.nn.relu, std=0.)
 
         model_done = smdp.NeverDone()
         env = smdp.SyntheticMDP(model_init, model_trans, model_obs, model_rew, model_done)

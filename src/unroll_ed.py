@@ -303,5 +303,73 @@ def rollout_transformer(agent, agent_params, env_id, transform_params, prompt=No
     return rets, lens, buffer
 
 
+# class RecordEpisodeStatistics(gym.Wrapper):
+#     def __init__(self, env, deque_size=100):
+#         super().__init__(env)
+#         self.num_envs = getattr(env, "num_envs", 1)
+#         self.episode_returns = None
+#         self.episode_lengths = None
+
+#     def reset(self, **kwargs):
+#         # observations = super().reset(**kwargs)
+#         observations = self.env.reset()
+#         self.episode_returns = np.zeros(self.num_envs, dtype=np.float32)
+#         self.episode_lengths = np.zeros(self.num_envs, dtype=np.int32)
+#         self.lives = np.zeros(self.num_envs, dtype=np.int32)
+#         self.returned_episode_returns = np.zeros(self.num_envs, dtype=np.float32)
+#         self.returned_episode_lengths = np.zeros(self.num_envs, dtype=np.int32)
+#         return observations
+
+#     def step(self, action):
+#         observations, rewards, term, trunc, infos = super().step(action)
+#         dones = term | trunc
+#         # self.episode_returns += infos["reward"]
+#         self.episode_returns += rewards
+#         self.episode_lengths += 1
+#         self.returned_episode_returns[:] = self.episode_returns
+#         self.returned_episode_lengths[:] = self.episode_lengths
+#         self.episode_returns *= 1 - infos["terminated"]
+#         self.episode_lengths *= 1 - infos["terminated"]
+#         infos["r"] = self.returned_episode_returns
+#         infos["l"] = self.returned_episode_lengths
+#         return ( observations, rewards, dones, infos,)
+
+
+def rollout_mlp(env_id, agent_forward, num_envs=8, num_steps=1000, vid_name=None, seed=0):
+    import envpool
+    if vid_name is None and False:
+        envs = envpool.make_gymnasium(f"{env_id}-v4", num_envs=num_envs)
+        envs.num_envs = num_envs
+        envs.single_action_space = envs.action_space
+        envs.single_observation_space = envs.observation_space
+        # envs = RecordEpisodeStatistics(envs)
+    else:
+        envs = gym.vector.SyncVectorEnv([make_env(env_id, i, vid_name, 0.99) for i in range(num_envs)])
+
+    stats = []
+    buffer = dict(obs=[], act=[], rew=[], done=[])
+    obs, infos = envs.reset()
+    for _ in tqdm(range(num_steps), desc="Rollout"):
+        act = agent_forward(obs)
+
+        buffer['obs'].append(obs)
+        buffer['act'].append(act)
+
+        act = np.array(act, dtype=np.float64)
+        obs, rew, term, trunc, infos = envs.step(act)
+
+        buffer['rew'].append(rew)
+        buffer['done'].append(term | trunc)
+
+        if "final_info" in infos:
+            for info in infos["final_info"]:
+                if info and "episode" in info:
+                    stats.append((info["episode"]["r"], info["episode"]["l"]))
+    for k in ['obs', 'act', 'rew', 'done']:
+        buffer[k] = np.stack(buffer[k], axis=1)
+    stats = np.array(stats).squeeze()
+    rets, lens = stats[:, 0], stats[:, 1]
+    return rets, lens, buffer
+
 if __name__ == '__main__':
     main(parser.parse_args())

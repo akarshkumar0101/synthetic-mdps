@@ -6,6 +6,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from tqdm.auto import tqdm
+
 
 # taken from https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75
 def tree_stack(trees):
@@ -84,3 +86,16 @@ def smooth_signal(x, window, kernel='uniform'):
     else:
         raise NotImplementedError
     return np.convolve(x, kernel, mode='valid')
+
+def scan(f, init, xs):
+    """
+    Custom scan which doesn't compile f.
+    """
+    carry = init
+    xs_flat, _ = jax.tree.flatten(xs)
+    N = len(xs_flat[0])
+    ys = []
+    for i in tqdm(range(N)):
+        carry, y = f(carry, jax.tree.map(lambda x: x[i], xs))
+        ys.append(y)
+    return carry, tree_stack(ys)

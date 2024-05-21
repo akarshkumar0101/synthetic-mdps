@@ -105,31 +105,26 @@ class BCTransformer(nn.Module):
         self.blocks = [Block(n_heads=self.n_heads, mask_type=self.mask_type) for _ in range(self.n_layers)]
         self.ln = nn.LayerNorm()
 
-        self.actor = nn.Dense(features=self.d_act, kernel_init=nn.initializers.normal(1e-4))  # T, Da
-        self.wm = nn.Dense(features=self.d_obs, kernel_init=nn.initializers.normal(1e-4))  # T, Do
+        self.predict_obs = nn.Dense(features=self.d_obs, kernel_init=nn.initializers.normal(1e-4))
+        self.predict_act = nn.Dense(features=self.d_act, kernel_init=nn.initializers.normal(1e-4))
 
-    def __call__(self, obs, act, time):  # obs: (T, Do), # act: (T, Da), # time: (T, )
+    def __call__(self, obs, act):  # obs: (T, Do), act: (T, Da)
         assert obs.shape[0] == act.shape[0]
-        assert obs.shape[0] <= self.ctx_len
-        T, _ = obs.shape
-        # time_prv, time_now, time_nxt = time[:-2], time[1:-1], time[2:]
-        # dt = time_nxt - time_now
+        T, Do = obs.shape
+        assert T <= self.ctx_len
 
         x_obs = self.embed_obs(obs)  # (T, D)
         x_act = self.embed_act(act)  # (T, D)
         x_pos = self.embed_pos(jnp.arange(T))  # (T, D)
-        # x_dt = self.embed_dt(dt)
-        
-        x_act_prv = jnp.concatenate([jnp.zeros((1, self.d_embd)), x_act[:-1]], axis=0)
 
-        x = x_pos + x_obs + x_act_prv
+        x = x_pos + x_obs + x_act
         for block in self.blocks:
             x = block(x)
         x = self.ln(x)
 
-        act_pred = self.actor(x)
-        obs_pred = self.wm(x)
-        return dict(act_pred=act_pred, obs_pred=obs_pred)
+        obs_pred = self.predict_obs(x)
+        act_pred = self.predict_act(x)
+        return dict(obs=obs_pred, act=act_pred)
 
 
 class TrajectoryTransformer(nn.Module):
