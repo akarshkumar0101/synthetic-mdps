@@ -19,6 +19,8 @@ from agents.basic import BigBasicAgentSeparate, BasicAgentSeparate
 from algos.ppo_single import PPO
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--seed", type=int, default=0)
+
 parser.add_argument("--env_id", type=str, default="CartPole-v1")
 parser.add_argument("--agent_id", type=str, default="small")
 
@@ -99,11 +101,11 @@ def main(args):
 
     get_dataset_for_env_params_vmap = jax.jit(jax.vmap(get_dataset_for_env_params))
 
-    rng = jax.random.PRNGKey(0)
+    rng = jax.random.PRNGKey(args.seed)
     data = []
     for _ in tqdm(range(args.n_seeds_seq)):
         rng, _rng = split(rng)
-        dataset, rets_train, rets_eval = get_dataset_for_env_params_vmap(split(rng, args.n_seeds_par))
+        dataset, rets_train, rets_eval = get_dataset_for_env_params_vmap(split(_rng, args.n_seeds_par))
         data.append((dataset, rets_train, rets_eval))
     data = util.tree_stack(data)
     data = jax.tree.map(lambda x: rearrange(x, "S1 S2 ... -> (S1 S2) ..."), data)

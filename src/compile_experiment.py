@@ -108,6 +108,7 @@ for family in ['mchain', 'bandit', 'dsmdp', 'mdsmdp', 'csmdp', 'ucsmdp', 'ecsmdp
 envs_synthetic = list(set(envs_synthetic))
 # print(envs_synthetic)
 print(len(envs_synthetic), " synthetic envs")
+n_seeds = 5
 
 # np.random.seed(1)
 # for i in range(3):
@@ -430,6 +431,7 @@ def exp_data_syn(dir_exp):
     cfg_default = {}
     # ------------------- SYNTHETIC -------------------
     cfgs = []
+    # for seed in range(n_seeds):
     for env_id in envs_synthetic:
         cfg = cfg_default.copy()
         cfg.update(
@@ -440,6 +442,8 @@ def exp_data_syn(dir_exp):
             n_iters_train=100,
             n_iters_eval=4,
             lr=3e-4,
+            # seed=seed,
+            # save_dir=f"{dir_exp}/smdp/{env_id}_seed/",
             save_dir=f"{dir_exp}/{dataset_dirs[env_id]}/",
         )
         cfgs.append(cfg)

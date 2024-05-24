@@ -220,8 +220,9 @@ def main(args):
             batch['obs'] = batch['obs'].at[:, -1, :].set(obs)
             _, outputs, _ = agent_forward(train_state.params, batch)
             act = outputs['act'][:, -1, :]
+            print("GENERATING RANDOM NORMAL ACTIONS ...")
+            act = jnp.array(np.random.normal(size=act.shape).astype(act.dtype)) # TODO: delete me, this creates random actions
             act = data_utils.inverse_transform_act(act, transform_params[0])
-            # act = jnp.array(np.random.normal(size=act.shape).astype(act.dtype))
             return act
         print("-------------ROLLOUT--------------")
         rets, lens, buffer = unroll_ed.rollout_mlp(args.env_id, jax.jit(agent_forward_rollout), num_envs=args.n_envs, num_steps=1000, vid_name=None, seed=0)
